@@ -135,7 +135,9 @@ model training.
 - [docs/knowledge-base.md](docs/knowledge-base.md) — full architecture,
   scoring model, decision record, verified performance, roadmap
 - [docs/diagrams.md](docs/diagrams.md) — UML: component, sequence, class,
-  case-lifecycle state diagram
+  case-lifecycle state diagram (plain Markdown, GitHub-rendered)
+- [docs/diagrams.html](docs/diagrams.html) — same four diagrams as a
+  standalone navigable page (open directly in a browser)
 
 ## Where this would go next (production deltas)
 
