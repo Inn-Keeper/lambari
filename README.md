@@ -130,6 +130,13 @@ In Kafka mode, every flagged verdict is also published to the `verdicts`
 topic (keyed by tx id) for downstream consumers — notifications, data lake,
 model training.
 
+## Docs
+
+- [docs/knowledge-base.md](docs/knowledge-base.md) — full architecture,
+  scoring model, decision record, verified performance, roadmap
+- [docs/diagrams.md](docs/diagrams.md) — UML: component, sequence, class,
+  case-lifecycle state diagram
+
 ## Where this would go next (production deltas)
 
 - Swap `cases.MemStore` for a pgx implementation of `cases.Store`
@@ -155,6 +162,7 @@ frontend/
   src/lib/useStream.ts        # typed SSE hook
   src/components/             # StatCard, ThroughputChart, Breakdown,
                               # LiveFeed, SimControl
+docs/               # knowledge base + UML diagrams
 docker-compose.yml  # Redpanda + Redpanda Console
 Makefile            # every workflow, one word each
 pnpm-workspace.yaml # pnpm workspace root (frontend)
