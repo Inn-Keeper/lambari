@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+backend/api
+backend/loadgen
+.DS_Store
+._*
+*.tsbuildinfo

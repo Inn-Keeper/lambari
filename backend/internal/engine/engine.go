@@ -1,0 +1,269 @@
+package engine
+
+import (
+	"runtime"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"tripwire/internal/model"
+)
+
+// Engine is a bounded worker pool that scores transactions concurrently.
+// Ingest is non-blocking up to the buffer size; beyond that, backpressure
+// applies (Submit blocks), which is exactly what you want in front of Kafka.
+type Engine struct {
+	in    chan model.Transaction
+	rules []Rule
+	state *State
+	done  chan struct{}
+	wg    sync.WaitGroup
+
+	// counters (atomics — read by the stats endpoint at any time)
+	processed atomic.Int64
+	approved  atomic.Int64
+	reviewed  atomic.Int64
+	declined  atomic.Int64
+
+	// per-rule fire counts
+	ruleMu    sync.Mutex
+	ruleFires map[string]int64
+
+	// latency reservoir (sampled) for percentile estimates
+	latMu     sync.Mutex
+	latSample []int64 // microseconds, capped ring
+
+	// ring buffer of recent verdicts for the live feed
+	ringMu sync.Mutex
+	ring   []model.Verdict
+	ringAt int
+
+	// optional hook invoked for every non-approve verdict (case opening,
+	// Kafka verdict publishing). Set before Start; not synchronized after.
+	onFlagged func(model.Verdict)
+
+	// rolling throughput: processed count snapshots per second
+	lastSnap  atomic.Int64
+	lastRate  atomic.Int64
+	startedAt time.Time
+}
+
+const (
+	bufferSize = 16_384
+	ringSize   = 64
+	latCap     = 4096
+)
+
+func New() *Engine {
+	e := &Engine{
+		in:        make(chan model.Transaction, bufferSize),
+		rules:     DefaultRules(),
+		state:     NewState(),
+		done:      make(chan struct{}),
+		ruleFires: make(map[string]int64),
+		ring:      make([]model.Verdict, ringSize),
+		startedAt: time.Now(),
+	}
+	return e
+}
+
+// OnFlagged registers a callback fired for every review/decline verdict.
+// Must be called before Start. The callback runs on worker goroutines, so
+// it has to be fast and non-blocking.
+func (e *Engine) OnFlagged(fn func(model.Verdict)) {
+	e.onFlagged = fn
+}
+
+// Start launches the worker pool. Workers = 2× logical CPUs: scoring is
+// CPU-light but lock-punctuated, so oversubscribing hides contention stalls.
+func (e *Engine) Start() {
+	workers := runtime.NumCPU() * 2
+	for i := 0; i < workers; i++ {
+		e.wg.Add(1)
+		go e.worker()
+	}
+	e.state.StartSweeper(e.done)
+	go e.rateTicker()
+}
+
+// Stop drains and shuts down.
+func (e *Engine) Stop() {
+	close(e.in)
+	e.wg.Wait()
+	close(e.done)
+}
+
+// Submit queues one transaction. Blocks only when the buffer is full.
+func (e *Engine) Submit(tx model.Transaction) {
+	e.in <- tx
+}
+
+// TrySubmit queues without blocking; returns false if the engine is saturated.
+func (e *Engine) TrySubmit(tx model.Transaction) bool {
+	select {
+	case e.in <- tx:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) worker() {
+	defer e.wg.Done()
+	for tx := range e.in {
+		e.score(&tx)
+	}
+}
+
+func (e *Engine) score(tx *model.Transaction) {
+	start := time.Now()
+	total := 0
+	var flags []string
+	for _, rule := range e.rules {
+		pts, flag := rule(tx, e.state)
+		if pts > 0 {
+			total += pts
+			flags = append(flags, flag)
+		}
+	}
+	decision := Decide(total)
+	lat := time.Since(start).Microseconds()
+
+	v := model.Verdict{
+		TxID: tx.ID, CardBIN: tx.CardBIN, Amount: tx.Amount,
+		Currency: tx.Currency, Country: tx.Country,
+		Score: total, Flags: flags, Decision: decision,
+		LatencyUS: lat, At: time.Now().UnixMilli(),
+	}
+
+	pn := e.processed.Add(1)
+	switch decision {
+	case model.Approve:
+		e.approved.Add(1)
+	case model.Review:
+		e.reviewed.Add(1)
+	case model.Decline:
+		e.declined.Add(1)
+	}
+
+	if len(flags) > 0 {
+		e.ruleMu.Lock()
+		for _, f := range flags {
+			e.ruleFires[f]++
+		}
+		e.ruleMu.Unlock()
+	}
+
+	// sample latency (keep it cheap: only every 8th tx)
+	if pn%8 == 0 {
+		e.latMu.Lock()
+		if len(e.latSample) < latCap {
+			e.latSample = append(e.latSample, lat)
+		} else {
+			e.latSample[int(pn/8)%latCap] = lat
+		}
+		e.latMu.Unlock()
+	}
+
+	if decision != model.Approve && e.onFlagged != nil {
+		e.onFlagged(v)
+	}
+
+	// keep flagged verdicts (and a trickle of approvals) for the live feed
+	if decision != model.Approve || pn%97 == 0 {
+		e.ringMu.Lock()
+		e.ring[e.ringAt] = v
+		e.ringAt = (e.ringAt + 1) % ringSize
+		e.ringMu.Unlock()
+	}
+}
+
+func (e *Engine) rateTicker() {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-e.done:
+			return
+		case <-t.C:
+			now := e.processed.Load()
+			e.lastRate.Store(now - e.lastSnap.Load())
+			e.lastSnap.Store(now)
+		}
+	}
+}
+
+// ---- read side ------------------------------------------------------------
+
+type Stats struct {
+	Processed   int64            `json:"processed"`
+	Approved    int64            `json:"approved"`
+	Reviewed    int64            `json:"reviewed"`
+	Declined    int64            `json:"declined"`
+	RatePerSec  int64            `json:"rate_per_sec"`
+	P50US       int64            `json:"p50_us"`
+	P99US       int64            `json:"p99_us"`
+	QueueDepth  int              `json:"queue_depth"`
+	QueueCap    int              `json:"queue_cap"`
+	UptimeSec   int64            `json:"uptime_sec"`
+	RuleFires   map[string]int64 `json:"rule_fires"`
+	FlaggedRate float64          `json:"flagged_rate"` // (review+decline)/processed
+}
+
+func (e *Engine) Snapshot() Stats {
+	p := e.processed.Load()
+	rev, dec := e.reviewed.Load(), e.declined.Load()
+
+	e.latMu.Lock()
+	lats := make([]int64, len(e.latSample))
+	copy(lats, e.latSample)
+	e.latMu.Unlock()
+	sort.Slice(lats, func(i, j int) bool { return lats[i] < lats[j] })
+	var p50, p99 int64
+	if n := len(lats); n > 0 {
+		p50 = lats[n/2]
+		p99 = lats[min(n-1, n*99/100)]
+	}
+
+	e.ruleMu.Lock()
+	fires := make(map[string]int64, len(e.ruleFires))
+	for k, v := range e.ruleFires {
+		fires[k] = v
+	}
+	e.ruleMu.Unlock()
+
+	var flagged float64
+	if p > 0 {
+		flagged = float64(rev+dec) / float64(p)
+	}
+
+	return Stats{
+		Processed: p, Approved: e.approved.Load(), Reviewed: rev, Declined: dec,
+		RatePerSec: e.lastRate.Load(), P50US: p50, P99US: p99,
+		QueueDepth: len(e.in), QueueCap: cap(e.in),
+		UptimeSec: int64(time.Since(e.startedAt).Seconds()),
+		RuleFires: fires, FlaggedRate: flagged,
+	}
+}
+
+// Recent returns the ring buffer newest-first.
+func (e *Engine) Recent() []model.Verdict {
+	e.ringMu.Lock()
+	defer e.ringMu.Unlock()
+	out := make([]model.Verdict, 0, ringSize)
+	for i := 0; i < ringSize; i++ {
+		idx := (e.ringAt - 1 - i + ringSize*2) % ringSize
+		if e.ring[idx].TxID != "" {
+			out = append(out, e.ring[idx])
+		}
+	}
+	return out
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
