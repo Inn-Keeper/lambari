@@ -1,6 +1,6 @@
 // Package kafka wires the engine to a Kafka-compatible broker (Kafka or
 // Redpanda) using franz-go — the fastest, most actively maintained pure-Go
-// client. The whole package is optional: if TRIPWIRE_KAFKA_BROKERS is unset,
+// client. The whole package is optional: if LAMBARI_KAFKA_BROKERS is unset,
 // the API runs in inline mode and this code never executes.
 package kafka
 
@@ -12,8 +12,8 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"tripwire/internal/engine"
-	"tripwire/internal/model"
+	"lambari/internal/engine"
+	"lambari/internal/model"
 )
 
 const Topic = "transactions"
@@ -27,7 +27,7 @@ type Consumer struct {
 func NewConsumer(brokers []string, eng *engine.Engine) (*Consumer, error) {
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
-		kgo.ConsumerGroup("tripwire-scoring"),
+		kgo.ConsumerGroup("lambari-scoring"),
 		kgo.ConsumeTopics(Topic),
 		kgo.FetchMaxBytes(16<<20),
 		kgo.DisableAutoCommit(), // commit after the engine accepts the batch

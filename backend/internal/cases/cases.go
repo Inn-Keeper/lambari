@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"tripwire/internal/model"
+	"lambari/internal/model"
 )
 
 type Status string

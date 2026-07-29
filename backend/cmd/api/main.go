@@ -11,16 +11,16 @@ import (
 	"syscall"
 	"time"
 
-	"tripwire/internal/api"
-	"tripwire/internal/cases"
-	"tripwire/internal/engine"
-	"tripwire/internal/kafka"
-	"tripwire/internal/model"
+	"lambari/internal/api"
+	"lambari/internal/cases"
+	"lambari/internal/engine"
+	"lambari/internal/kafka"
+	"lambari/internal/model"
 )
 
 func main() {
-	addr := envOr("TRIPWIRE_ADDR", ":8080")
-	brokers := os.Getenv("TRIPWIRE_KAFKA_BROKERS") // e.g. "localhost:19092"
+	addr := envOr("LAMBARI_ADDR", ":8080")
+	brokers := os.Getenv("LAMBARI_KAFKA_BROKERS") // e.g. "localhost:19092"
 
 	eng := engine.New()
 	store := cases.NewMemStore(200)
@@ -62,7 +62,7 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("tripwire api listening", "addr", addr, "mode", mode)
+		slog.Info("lambari api listening", "addr", addr, "mode", mode)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("server", "err", err)
 			os.Exit(1)

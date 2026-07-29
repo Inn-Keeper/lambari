@@ -29,7 +29,7 @@ kafka-up:         ## start Redpanda + console (localhost:8081)
 	docker compose up -d
 
 kafka-run:        ## run the API consuming from Kafka
-	cd backend && TRIPWIRE_KAFKA_BROKERS=localhost:19092 go run ./cmd/api
+	cd backend && LAMBARI_KAFKA_BROKERS=localhost:19092 go run ./cmd/api
 
 kafka-loadgen:    ## produce 5000 tx/s into the transactions topic
 	cd backend && go run ./cmd/loadgen -rate 5000 -duration 30s -kafka localhost:19092

@@ -16,8 +16,8 @@ import (
 	"os"
 	"time"
 
-	"tripwire/internal/kafka"
-	"tripwire/internal/model"
+	"lambari/internal/kafka"
+	"lambari/internal/model"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"tripwire/internal/model"
+	"lambari/internal/model"
 )
 
 // Rule scores one transaction. Returns (points, flagName) — flagName empty when the rule passes.

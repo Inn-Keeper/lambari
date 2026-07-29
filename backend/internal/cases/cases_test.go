@@ -3,7 +3,7 @@ package cases
 import (
 	"testing"
 
-	"tripwire/internal/model"
+	"lambari/internal/model"
 )
 
 func v(id string, score int) model.Verdict {

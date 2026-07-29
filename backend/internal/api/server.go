@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"tripwire/internal/cases"
-	"tripwire/internal/engine"
-	"tripwire/internal/model"
+	"lambari/internal/cases"
+	"lambari/internal/engine"
+	"lambari/internal/model"
 )
 
 // Server exposes the engine over HTTP: ingest, stats, an SSE live stream

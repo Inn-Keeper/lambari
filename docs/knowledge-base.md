@@ -1,4 +1,4 @@
-# Tripwire — Product Knowledge Base
+# Lambari — Product Knowledge Base
 
 *Real-time anti-fraud scoring pipeline. Full-stack proof of concept.*
 *Last updated: 2026-07-23 · Status: PoC, verified working end-to-end*
@@ -45,7 +45,7 @@ Five frontend runtime dependencies. Every addition needs to pay rent.
  loadgen ──HTTP──►  │  API :8080                                   │
                     │   POST /api/transactions  ─┐                 │
  loadgen ──Kafka─►  │  franz-go consumer        ─┤                 │
- (topic:            │   (group: tripwire-scoring)│                 │
+ (topic:            │   (group: lambari-scoring)│                 │
   transactions)     │                            ▼                 │
                     │   ┌────────────────────────────────┐         │
                     │   │ Engine: chan (16,384 buffer)   │         │
@@ -175,7 +175,7 @@ approve #62b584 · review #f5b341 · decline #f0564a · accent #5b8def`
 **Type:** Space Grotesk (display) · Inter (body) · IBM Plex Mono with
 tabular numerals for **all** data — numbers never jitter as they update.
 
-**Signature element:** the live verdict feed is a "tripwire" — a vertical
+**Signature element:** the live verdict feed is a signal wire — a vertical
 wire down the left edge with nodes that light up amber/red as flagged
 transactions land. One bold idea, executed consistently; everything else
 stays disciplined.
@@ -253,8 +253,8 @@ make kafka-run      # API consuming from `transactions` topic
 make kafka-loadgen  # produce 5000 tx/s into the topic
 ```
 
-Env vars: `TRIPWIRE_ADDR` (default `:8080`) ·
-`TRIPWIRE_KAFKA_BROKERS` (unset = inline mode).
+Env vars: `LAMBARI_ADDR` (default `:8080`) ·
+`LAMBARI_KAFKA_BROKERS` (unset = inline mode).
 
 ## 13. Repository layout
 

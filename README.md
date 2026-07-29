@@ -1,4 +1,4 @@
-# Tripwire — real-time fraud scoring pipeline (PoC)
+# Lambari — real-time fraud scoring pipeline (PoC)
 
 A full-stack anti-fraud proof of concept: a Go worker-pool engine that scores
 payment transactions against velocity, geo, amount, and merchant-risk rules,
@@ -81,7 +81,7 @@ if the engine saturates, polling slows and consumer lag becomes visible
  loadgen ──HTTP──►  │  API :8080                                   │
                     │   POST /api/transactions  ─┐                 │
  loadgen ──Kafka─►  │  franz-go consumer        ─┤                 │
- (topic:            │   (group: tripwire-scoring)│                 │
+ (topic:            │   (group: lambari-scoring)│                 │
   transactions)     │                            ▼                 │
                     │   ┌────────────────────────────────┐         │
                     │   │ Engine: chan (16k buf)         │         │

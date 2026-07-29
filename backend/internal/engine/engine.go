@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"tripwire/internal/model"
+	"lambari/internal/model"
 )
 
 // Engine is a bounded worker pool that scores transactions concurrently.

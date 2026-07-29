@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tripwire — System Diagrams</title>
+<title>Lambari — System Diagrams</title>
 <style>
   @font-face {
     font-family: 'Space Grotesk';
@@ -321,7 +321,7 @@
 <body>
   <nav class="rail">
     <div class="rail-brand">
-      <span class="dot"></span>TRIPWIRE
+      <span class="dot"></span>LAMBARI
       <small>SYSTEM&nbsp;DIAGRAMS</small>
     </div>
     <div class="wire">
@@ -331,7 +331,7 @@
       <a class="wire-node" data-target="lifecycle" href="#lifecycle">04<b>A case's life</b></a>
     </div>
     <div class="rail-foot">
-      Source: <a href="https://github.com/Inn-Keeper/tripwire" target="_blank" rel="noopener">Inn-Keeper/tripwire</a><br>
+      Source: <a href="https://github.com/Inn-Keeper/lambari" target="_blank" rel="noopener">Inn-Keeper/lambari</a><br>
       Full spec: docs/knowledge-base.md
     </div>
   </nav>
@@ -341,7 +341,7 @@
       <p class="eyebrow">Backend architecture — four views</p>
       <h1>How a transaction becomes a verdict</h1>
       <p class="lede">
-        Tripwire scores payment transactions against velocity, geo, amount,
+        Lambari scores payment transactions against velocity, geo, amount,
         and merchant-risk rules in microseconds, then routes anything
         suspicious into an analyst review queue. These four diagrams read
         top to bottom as increasing zoom: the whole system, one request's
@@ -607,7 +607,7 @@ stateDiagram-v2
     </section>
 
     <footer>
-      <span>tripwire · backend/internal/{engine,model,cases}</span>
+      <span>lambari · backend/internal/{engine,model,cases}</span>
       <span>docs/diagrams.md has the plain-markdown source</span>
     </footer>
   </main>

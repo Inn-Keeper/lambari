@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"tripwire/internal/model"
+	"lambari/internal/model"
 )
 
 func benignTx(i int) model.Transaction {

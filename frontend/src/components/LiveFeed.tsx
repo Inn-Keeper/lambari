@@ -8,7 +8,7 @@ const DECISION_STYLE: Record<string, { dot: string; text: string; label: string 
 };
 
 /**
- * The tripwire: a vertical wire down the left edge; each verdict is a node
+ * A signal wire runs down the left edge; each verdict is a node
  * on the wire. Flagged transactions light up amber or red as they land.
  */
 export function LiveFeed({ verdicts }: { verdicts: Verdict[] }) {

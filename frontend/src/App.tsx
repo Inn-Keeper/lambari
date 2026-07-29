@@ -20,7 +20,7 @@ export default function App() {
       <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <h1 className="font-display text-xl font-bold tracking-tight">
-            TRIPWIRE
+            LAMBARI
           </h1>
           <span
             className={`flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 text-xs ${
@@ -88,7 +88,7 @@ export default function App() {
       </div>
 
       <footer className="mt-6 text-center text-xs text-faint">
-        Tripwire · Go scoring engine · Kafka-ready pipeline · proof of concept
+        Lambari · Go scoring engine · Kafka-ready pipeline · proof of concept
       </footer>
     </div>
   );

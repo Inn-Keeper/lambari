@@ -1,4 +1,4 @@
-module tripwire
+module lambari
 
 go 1.22
 

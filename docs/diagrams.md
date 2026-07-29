@@ -1,4 +1,4 @@
-# Tripwire — UML Diagrams
+# Lambari — UML Diagrams
 
 Companion to [knowledge-base.md](knowledge-base.md). GitHub renders these
 Mermaid blocks natively — no separate viewer needed.
