@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import * as Slider from "@radix-ui/react-slider";
 import * as Switch from "@radix-ui/react-switch";
-import { setSimulation, type SimState } from "../lib/useStream";
+import { setSimulation } from "../lib/api";
+import type { SimState } from "../lib/useStream";
 
 export function SimControl({ sim }: { sim: SimState }) {
   const [rate, setRate] = useState(5000);
   const [running, setRunning] = useState(false);
+  const [error, setError] = useState(false);
 
   // keep local state in sync when the server reports sim status
   useEffect(() => {
@@ -15,16 +17,36 @@ export function SimControl({ sim }: { sim: SimState }) {
 
   const toggle = async (on: boolean) => {
     setRunning(on);
-    await setSimulation(on ? rate : 0);
+    setError(false);
+    try {
+      await setSimulation(on ? rate : 0);
+    } catch (err) {
+      console.error("simulator update failed", err);
+      setRunning(sim.running); // revert to server-reported truth
+      setError(true);
+    }
   };
 
   const changeRate = async (v: number) => {
     setRate(v);
-    if (running) await setSimulation(v);
+    if (!running) return;
+    setError(false);
+    try {
+      await setSimulation(v);
+    } catch (err) {
+      console.error("simulator update failed", err);
+      if (sim.running && sim.rate > 0) setRate(sim.rate);
+      setError(true);
+    }
   };
 
   return (
     <div className="flex items-center gap-4">
+      {error && (
+        <span role="alert" className="text-xs text-decline">
+          sim update failed
+        </span>
+      )}
       <div className="flex items-center gap-3">
         <span className="font-mono text-sm tabular-nums text-muted">
           {rate.toLocaleString()} tx/s

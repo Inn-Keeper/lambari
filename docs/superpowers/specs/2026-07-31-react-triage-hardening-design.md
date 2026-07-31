@@ -35,11 +35,18 @@ return shape and every consuming component are unchanged.
 
 ### 2. Push-driven queue
 
-`ReviewQueue` drops its `setInterval`. The SSE `cases` counts (already a
-prop) are the push signal: refetch `/api/cases` when the counts change, with
-an `AbortController` cancelling the in-flight request so stale responses
-can't clobber newer ones. The polling path is deleted as an orphan of this
-change.
+`ReviewQueue` drops its `setInterval`. The push signal is the SSE frame
+itself — App passes `stats.processed` (monotonic, bumps once per frame) as a
+`tick` prop, and the queue refetches `/api/cases` on each tick, with an
+`AbortController` cancelling the in-flight request so stale responses can't
+clobber newer ones. The polling path is deleted as an orphan of this change.
+
+*Revised during smoke testing:* the original signal (the `cases` counts) has
+a blind spot — with the open count pinned at the server's 200-case eviction
+cap and nothing resolving, counts never change while the queue's contents
+keep churning, so the list froze and resolves 404'd against evicted cases.
+The frame tick has no such blind spot and still goes quiet when the stream
+is down.
 
 ### 3. Honest mutations: optimistic with rollback
 
@@ -60,6 +67,11 @@ A pure, exported `casesReducer` models the queue with actions
 - `resolveFail` reinstates it at its original index and sets an error
   (`"Couldn't resolve <id> — try again"`) rendered as an inline banner in
   the panel; the banner clears on the next successful action or refetch.
+- `resolveGone` (added during smoke testing): a 404 means the case no longer
+  exists server-side — evicted or resolved elsewhere. Rolling back would
+  resurrect a row nobody can act on, so the row stays gone and the banner
+  says `"Case <id> was already resolved or evicted"`. `lib/api.ts` throws a
+  typed `HttpError` carrying `status` so the component can tell 404 apart.
 
 ### 4. SimControl: revert on failure
 

@@ -1,4 +1,4 @@
-.PHONY: setup build run-api run-web sim bench test loadgen kafka-up kafka-run e2e
+.PHONY: setup build run-api run-web sim bench test test-web loadgen kafka-up kafka-run e2e
 
 setup:            ## install backend + frontend dependencies
 	cd backend && go mod tidy
@@ -18,6 +18,9 @@ sim:              ## start the built-in simulator at 5000 tx/s
 
 test:             ## run backend tests
 	cd backend && go test ./...
+
+test-web:         ## run frontend (vitest) tests
+	pnpm --filter lambari-dashboard test
 
 bench:            ## engine throughput benchmark
 	cd backend && go test -bench=BenchmarkEngineThroughput -benchtime=3s -run XXX ./internal/engine/

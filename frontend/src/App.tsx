@@ -77,7 +77,7 @@ export default function App() {
       </div>
 
       <div className="mt-3">
-        <ReviewQueue counts={cases} />
+        <ReviewQueue counts={cases} tick={stats?.processed ?? 0} />
       </div>
 
       <div className="mt-3 grid gap-3 lg:grid-cols-3">

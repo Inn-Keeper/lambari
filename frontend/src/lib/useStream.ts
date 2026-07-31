@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer } from "react";
 
 export type Decision = "approve" | "review" | "decline";
 
@@ -53,51 +53,57 @@ export interface StreamState {
 
 const MAX_HISTORY = 90;
 
+/** One SSE frame from GET /api/stream. */
+export interface StreamMessage {
+  stats: Stats;
+  recent: Verdict[] | null;
+  sim: SimState;
+  cases: CaseCounts;
+}
+
+export type StreamAction =
+  | { type: "open" }
+  | { type: "error" }
+  | { type: "message"; data: StreamMessage };
+
+export const initialStreamState: StreamState = {
+  connected: false,
+  stats: null,
+  recent: [],
+  sim: { running: false, rate: 0 },
+  cases: { open: 0, confirmed_fraud: 0, false_positive: 0 },
+  rateHistory: [],
+};
+
+export function streamReducer(s: StreamState, a: StreamAction): StreamState {
+  switch (a.type) {
+    case "open":
+      return { ...s, connected: true };
+    case "error":
+      return { ...s, connected: false };
+    case "message":
+      return {
+        connected: true,
+        stats: a.data.stats,
+        recent: a.data.recent ?? [],
+        sim: a.data.sim,
+        cases: a.data.cases,
+        rateHistory: [...s.rateHistory, a.data.stats.rate_per_sec].slice(-MAX_HISTORY),
+      };
+  }
+}
+
 export function useStream(): StreamState {
-  const [state, setState] = useState<StreamState>({
-    connected: false,
-    stats: null,
-    recent: [],
-    sim: { running: false, rate: 0 },
-    cases: { open: 0, confirmed_fraud: 0, false_positive: 0 },
-    rateHistory: [],
-  });
-  const history = useRef<number[]>([]);
+  const [state, dispatch] = useReducer(streamReducer, initialStreamState);
 
   useEffect(() => {
     const es = new EventSource("/api/stream");
-
-    es.onopen = () => setState((s) => ({ ...s, connected: true }));
-    es.onerror = () => setState((s) => ({ ...s, connected: false }));
-    es.onmessage = (ev) => {
-      const data = JSON.parse(ev.data) as {
-        stats: Stats;
-        recent: Verdict[] | null;
-        sim: SimState;
-        cases: CaseCounts;
-      };
-      const h = history.current;
-      h.push(data.stats.rate_per_sec);
-      if (h.length > MAX_HISTORY) h.shift();
-      setState({
-        connected: true,
-        stats: data.stats,
-        recent: data.recent ?? [],
-        sim: data.sim,
-        cases: data.cases,
-        rateHistory: [...h],
-      });
-    };
+    es.onopen = () => dispatch({ type: "open" });
+    es.onerror = () => dispatch({ type: "error" });
+    es.onmessage = (ev) =>
+      dispatch({ type: "message", data: JSON.parse(ev.data) as StreamMessage });
     return () => es.close();
   }, []);
 
   return state;
-}
-
-export async function setSimulation(rate: number): Promise<void> {
-  await fetch("/api/simulate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rate }),
-  });
 }
