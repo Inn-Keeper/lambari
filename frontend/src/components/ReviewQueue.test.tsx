@@ -64,6 +64,33 @@ describe("ReviewQueue", () => {
     expect(screen.getByRole("alert").textContent).toContain("tx_1");
   });
 
+  it("holds the list still while hovered and applies fresh data on unhover", async () => {
+    const second = {
+      cases: [{ ...caseBody.cases[0], id: "tx_2", verdict: { ...caseBody.cases[0].verdict, tx_id: "tx_2", amount: 999.99 } }],
+    };
+    let body: unknown = caseBody;
+    vi.stubGlobal("fetch", vi.fn(async () => ok(body)));
+
+    const { rerender } = render(<ReviewQueue counts={counts} tick={1} />);
+    await screen.findByText("123.45 SEK");
+
+    await userEvent.hover(screen.getByText(/review queue/i));
+    body = second;
+    rerender(<ReviewQueue counts={counts} tick={2} />); // next SSE frame while hovered
+
+    await screen.findByRole("status"); // "updates paused · 1 new"
+    expect(screen.getByText("123.45 SEK")).toBeInTheDocument(); // held still
+    expect(screen.queryByText("999.99 SEK")).not.toBeInTheDocument();
+
+    await userEvent.unhover(screen.getByText(/review queue/i));
+    await screen.findByText("999.99 SEK"); // fresh list applied
+    // the replaced row exits via animation — wait for it to actually leave
+    await waitFor(() =>
+      expect(screen.queryByText("123.45 SEK")).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("drops the row without rollback when the case is already gone (404)", async () => {
     stubFetch(404);
     render(<ReviewQueue counts={counts} tick={1} />);

@@ -49,12 +49,27 @@ export function ReviewQueue({ counts, tick }: { counts: CaseCounts; tick: number
     }
   };
 
+  // While the analyst's pointer is over the queue, the list holds still —
+  // rows must not yank away under a cursor that is aiming at a button.
+  const freshCount = state.deferred
+    ? state.deferred.filter((d) => !state.cases.some((c) => c.id === d.id)).length
+    : 0;
+
   return (
-    <div className="rounded-lg border border-line bg-panel p-4">
-      <div className="flex items-baseline justify-between">
+    <div
+      className="rounded-lg border border-line bg-panel p-4"
+      onMouseEnter={() => dispatch({ type: "pause" })}
+      onMouseLeave={() => dispatch({ type: "resume" })}
+    >
+      <div className="flex items-baseline justify-between gap-3">
         <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
           Review queue
         </div>
+        {state.paused && (
+          <span role="status" className="font-mono text-[11px] tabular-nums text-review">
+            updates paused{freshCount > 0 ? ` · ${freshCount} new` : ""}
+          </span>
+        )}
         <div className="font-mono text-[11px] tabular-nums text-faint">
           {counts.open} open · {counts.confirmed_fraud} fraud ·{" "}
           {counts.false_positive} cleared

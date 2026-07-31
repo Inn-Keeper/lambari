@@ -60,6 +60,35 @@ describe("casesReducer", () => {
     expect(s.error).toContain("a");
   });
 
+  it("while paused, fresh loads are deferred; resume applies the freshest", () => {
+    let s = loaded(["a", "b"]);
+    s = casesReducer(s, { type: "pause" });
+    s = casesReducer(s, { type: "loaded", cases: [mk("c"), mk("d")] });
+    expect(s.cases.map((c) => c.id)).toEqual(["a", "b"]); // list holds still
+    expect(s.deferred?.map((c) => c.id)).toEqual(["c", "d"]);
+    s = casesReducer(s, { type: "resume" });
+    expect(s.cases.map((c) => c.id)).toEqual(["c", "d"]);
+    expect(s.paused).toBe(false);
+    expect(s.deferred).toBeNull();
+  });
+
+  it("resume without deferred data just unpauses", () => {
+    let s = loaded(["a"]);
+    s = casesReducer(s, { type: "pause" });
+    s = casesReducer(s, { type: "resume" });
+    expect(s.cases.map((c) => c.id)).toEqual(["a"]);
+    expect(s.paused).toBe(false);
+  });
+
+  it("resume still filters the case with a resolve in flight", () => {
+    let s = loaded(["a", "b"]);
+    s = casesReducer(s, { type: "pause" });
+    s = casesReducer(s, { type: "resolveStart", id: "a" });
+    s = casesReducer(s, { type: "loaded", cases: [mk("a"), mk("b")] });
+    s = casesReducer(s, { type: "resume" });
+    expect(s.cases.map((c) => c.id)).toEqual(["b"]);
+  });
+
   it("loaded during an in-flight resolve keeps the optimistic removal", () => {
     let s = loaded(["a", "b"]);
     s = casesReducer(s, { type: "resolveStart", id: "a" });

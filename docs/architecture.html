@@ -1,0 +1,1214 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lambari — Fraud Pipeline Architecture & Guide</title>
+
+<style>
+  :root {
+    --board:   #EEF1F4;
+    --surface: #FFFFFF;
+    --sunk:    #E3E8ED;
+    --ink:     #16202B;
+    --ink-2:   #4A5A6A;
+    --ink-3:   #7E8D9C;
+    --line:    #C8D2DB;
+    --line-2:  #AEBCC8;
+    --flow:    #1F5FA8;
+    --hot:     #C8322E;
+    --mark:    #B0761A;
+    --ok:      #2E7A55;
+    --dot:     rgba(22, 32, 43, 0.07);
+
+    --f-display: "Avenir Next Condensed", "Futura", "Gill Sans", "Trebuchet MS", sans-serif;
+    --f-body: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --f-mono: Menlo, "SF Mono", ui-monospace, "Cascadia Mono", monospace;
+
+    --step: 0.5rem;
+    --rail: 1180px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --board:   #12181F;
+      --surface: #19212B;
+      --sunk:    #0D131A;
+      --ink:     #E4EBF2;
+      --ink-2:   #9AAABA;
+      --ink-3:   #6D7E8E;
+      --line:    #2C3946;
+      --line-2:  #3D4C5B;
+      --flow:    #6BA8E8;
+      --hot:     #F0736C;
+      --mark:    #E0A94A;
+      --ok:      #5FBF92;
+      --dot:     rgba(228, 235, 242, 0.06);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --board:   #12181F;
+    --surface: #19212B;
+    --sunk:    #0D131A;
+    --ink:     #E4EBF2;
+    --ink-2:   #9AAABA;
+    --ink-3:   #6D7E8E;
+    --line:    #2C3946;
+    --line-2:  #3D4C5B;
+    --flow:    #6BA8E8;
+    --hot:     #F0736C;
+    --mark:    #E0A94A;
+    --ok:      #5FBF92;
+    --dot:     rgba(228, 235, 242, 0.06);
+  }
+
+  :root[data-theme="light"] {
+    --board:   #EEF1F4;
+    --surface: #FFFFFF;
+    --sunk:    #E3E8ED;
+    --ink:     #16202B;
+    --ink-2:   #4A5A6A;
+    --ink-3:   #7E8D9C;
+    --line:    #C8D2DB;
+    --line-2:  #AEBCC8;
+    --flow:    #1F5FA8;
+    --hot:     #C8322E;
+    --mark:    #B0761A;
+    --ok:      #2E7A55;
+    --dot:     rgba(22, 32, 43, 0.07);
+  }
+
+  body {
+    background-color: var(--board);
+    background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+    background-size: 22px 22px;
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: var(--rail);
+    margin-inline: auto;
+    padding: clamp(2rem, 5vw, 4rem) clamp(1rem, 4vw, 2.5rem) 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: clamp(3rem, 6vw, 5rem);
+  }
+
+  /* ---------- shared type ---------- */
+
+  .eyebrow {
+    font-family: var(--f-display);
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--ink-3);
+  }
+
+  h1 {
+    font-family: var(--f-display);
+    font-size: clamp(2.2rem, 6vw, 3.4rem);
+    line-height: 1.02;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 0.6rem 0 0;
+  }
+
+  h2 {
+    font-family: var(--f-display);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0;
+    padding-bottom: 0.65rem;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  h3 {
+    font-family: var(--f-display);
+    font-size: 1.15rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  p { margin: 0; max-width: 68ch; }
+  strong { font-weight: 600; }
+  code, .m { font-family: var(--f-mono); font-size: 0.86em; }
+
+  .lede {
+    font-size: clamp(1.05rem, 2.2vw, 1.2rem);
+    color: var(--ink-2);
+    margin-top: 1.1rem;
+    max-width: 60ch;
+  }
+
+  section { display: flex; flex-direction: column; gap: 1.75rem; }
+
+  /* ---------- header ---------- */
+
+  header { border-bottom: 1px solid var(--line); padding-bottom: 2.5rem; }
+
+  .scaleline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 2.5rem;
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--line);
+  }
+
+  .scaleline > div { display: flex; flex-direction: column; gap: 0.15rem; }
+
+  .scaleline .n {
+    font-family: var(--f-mono);
+    font-size: 1.35rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--flow);
+  }
+
+  .scaleline .n.warn { color: var(--hot); }
+
+  .scaleline .k {
+    font-family: var(--f-display);
+    text-transform: uppercase;
+    letter-spacing: 0.11em;
+    font-size: 0.7rem;
+    color: var(--ink-3);
+  }
+
+  /* ---------- the board ---------- */
+
+  .board-scroll {
+    overflow-x: auto;
+    padding: 0.5rem 0 1.5rem;
+    margin-inline: calc(-1 * clamp(1rem, 4vw, 2.5rem));
+    padding-inline: clamp(1rem, 4vw, 2.5rem);
+  }
+
+  .pipeline {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    min-width: 1080px;
+  }
+
+  .stage {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    min-width: 0;
+  }
+
+  .stage-label {
+    font-family: var(--f-display);
+    text-transform: uppercase;
+    letter-spacing: 0.13em;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--ink-3);
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+  }
+
+  .stage-label .num {
+    font-family: var(--f-mono);
+    color: var(--flow);
+    font-size: 0.78rem;
+  }
+
+  .node {
+    background: var(--surface);
+    border: 1.5px solid var(--line-2);
+    border-radius: 3px;
+    padding: 0.8rem 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .node .t {
+    font-family: var(--f-display);
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.2;
+  }
+
+  .node .d {
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--ink-2);
+  }
+
+  .node ul {
+    margin: 0;
+    padding-left: 1rem;
+    font-size: 0.79rem;
+    line-height: 1.5;
+    color: var(--ink-2);
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .node .m { color: var(--ink); }
+
+  .node.accent-hot  { border-color: var(--hot); border-left-width: 4px; }
+  .node.accent-flow { border-color: var(--flow); border-left-width: 4px; }
+  .node.accent-ok   { border-color: var(--ok); border-left-width: 4px; }
+
+  .arrow {
+    flex: 0 0 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--line-2);
+    font-size: 1.4rem;
+    padding-top: 1.6rem;
+  }
+
+  .arrow.hot { color: var(--hot); }
+
+  .updown {
+    text-align: center;
+    color: var(--line-2);
+    font-size: 1.2rem;
+    line-height: 1;
+  }
+
+  /* the kubernetes envelope */
+  .envelope {
+    flex: 1 1 0;
+    border: 1.5px dashed var(--ink-3);
+    border-radius: 4px;
+    padding: 1.6rem 0.75rem 0.85rem;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    background: color-mix(in srgb, var(--surface) 45%, transparent);
+    min-width: 0;
+  }
+
+  .envelope-tag {
+    position: absolute;
+    top: -0.62rem;
+    left: 0.7rem;
+    background: var(--board);
+    padding: 0 0.4rem;
+    font-family: var(--f-display);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--ink-2);
+  }
+
+  .envelope .stage-label { margin-top: -0.35rem; }
+
+  .board-caption {
+    font-size: 0.82rem;
+    color: var(--ink-3);
+    font-style: italic;
+  }
+
+  /* ---------- legend ---------- */
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.6rem;
+    font-size: 0.78rem;
+    color: var(--ink-2);
+    padding-top: 0.4rem;
+  }
+
+  .legend span { display: flex; align-items: center; gap: 0.45rem; }
+
+  .swatch {
+    width: 1.6rem;
+    height: 0;
+    border-top: 3px solid;
+    flex: none;
+  }
+
+  /* ---------- decision cards ---------- */
+
+  .decisions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+    gap: 1.1rem;
+  }
+
+  .decision {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--mark);
+    border-radius: 3px;
+    padding: 1.15rem 1.2rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+
+  .tag {
+    font-family: var(--f-display);
+    text-transform: uppercase;
+    letter-spacing: 0.13em;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--mark);
+  }
+
+  .decision .q { font-size: 0.92rem; line-height: 1.5; }
+
+  .decision dl {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    font-size: 0.83rem;
+    line-height: 1.45;
+  }
+
+  .decision dt {
+    font-family: var(--f-display);
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    font-size: 0.63rem;
+    color: var(--ink-3);
+    margin-bottom: 0.1rem;
+  }
+
+  .decision dd { margin: 0; color: var(--ink-2); }
+  .decision dd.pick { color: var(--ink); }
+  .decision dd.pick::before { content: "▸ "; color: var(--ok); font-weight: 700; }
+
+  /* ---------- delta table ---------- */
+
+  .table-scroll { overflow-x: auto; }
+
+  table {
+    width: 100%;
+    min-width: 620px;
+    border-collapse: collapse;
+    font-size: 0.87rem;
+  }
+
+  th {
+    font-family: var(--f-display);
+    text-transform: uppercase;
+    letter-spacing: 0.11em;
+    font-size: 0.68rem;
+    color: var(--ink-3);
+    text-align: left;
+    padding: 0 0.9rem 0.55rem 0;
+    border-bottom: 1.5px solid var(--ink);
+    font-weight: 600;
+  }
+
+  td {
+    padding: 0.7rem 0.9rem 0.7rem 0;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    color: var(--ink-2);
+  }
+
+  td:first-child { color: var(--ink); font-weight: 500; width: 28%; }
+
+  .state { font-family: var(--f-display); text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.66rem; white-space: nowrap; }
+  .state.have { color: var(--ok); }
+  .state.gap  { color: var(--hot); }
+  .state.talk { color: var(--mark); }
+
+  /* ---------- narration ---------- */
+
+  .narration {
+    background: var(--sunk);
+    border-left: 3px solid var(--flow);
+    border-radius: 0 3px 3px 0;
+    padding: 1.3rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+
+  .narration ol {
+    margin: 0;
+    padding-left: 1.3rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--ink-2);
+  }
+
+  .narration li strong { color: var(--ink); }
+
+  /* ---------- glossary ---------- */
+
+  .glossary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+    gap: 2.4rem 3rem;
+    align-items: start;
+  }
+
+  .gloss-group { display: flex; flex-direction: column; gap: 1rem; }
+
+  .gloss-group > .head {
+    font-family: var(--f-display);
+    text-transform: uppercase;
+    letter-spacing: 0.13em;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding-bottom: 0.5rem;
+    border-bottom: 2px solid currentColor;
+  }
+
+  .gloss-group.g-stream > .head { color: var(--flow); }
+  .gloss-group.g-scale  > .head { color: var(--mark); }
+  .gloss-group.g-engine > .head { color: var(--hot); }
+  .gloss-group.g-domain > .head { color: var(--ink-2); }
+
+  .gloss-group dl {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.95rem;
+  }
+
+  .gloss-group dt {
+    font-family: var(--f-display);
+    font-size: 0.92rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--ink);
+  }
+
+  .gloss-group dt .m { font-weight: 500; }
+
+  .gloss-group dd {
+    margin: 0.15rem 0 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--ink-2);
+    max-width: 46ch;
+  }
+
+  .gloss-group dd em { color: var(--ink); font-style: normal; font-weight: 500; }
+
+  footer {
+    border-top: 1px solid var(--line);
+    padding-top: 1.5rem;
+    font-size: 0.8rem;
+    color: var(--ink-3);
+  }
+
+  @media (max-width: 640px) {
+    .scaleline { gap: 1.2rem 2rem; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Architecture Board · Live Casino Anti-Fraud</div>
+    <h1>Scoring fraud in the gap<br>before the bet settles</h1>
+    <p class="lede">
+      One board for the whole pipeline: where events enter, where the decision gets
+      made, where state lives, and which parts of it cost money. Every box carries a
+      tradeoff you should be able to defend out loud.
+    </p>
+
+    <div class="scaleline">
+      <div>
+        <span class="n">130k/s</span>
+        <span class="k">Engine bench, in-process</span>
+      </div>
+      <div>
+        <span class="n">7.8M/min</span>
+        <span class="k">Same number, in requests/min</span>
+      </div>
+      <div>
+        <span class="n warn">5k/s</span>
+        <span class="k">End-to-end — a flag, not a ceiling</span>
+      </div>
+      <div>
+        <span class="n">≤ 48</span>
+        <span class="k">Useful consumer pods = partitions</span>
+      </div>
+    </div>
+  </header>
+
+  <section>
+    <h2>The system as built</h2>
+    <p>
+      What actually runs from this repo. One Go binary hosts the consumer, the
+      scoring engine, and the API; the React console rides its SSE stream. In
+      inline mode the Kafka column drops out and ingest goes straight to the
+      engine — everything else is identical.
+    </p>
+
+    <div class="board-scroll">
+      <div class="pipeline">
+
+        <div class="stage">
+          <div class="stage-label"><span class="num">01</span> Traffic in</div>
+          <div class="node">
+            <span class="t">Load generator</span>
+            <span class="d"><span class="m">cmd/loadgen</span> — HTTP or Kafka mode, rate-controlled synthetic transactions.</span>
+          </div>
+          <div class="node">
+            <span class="t">Built-in simulator</span>
+            <span class="d">Driven from the console: <span class="m">POST /api/simulate</span>, up to 20k tx/s in-process.</span>
+          </div>
+          <div class="node">
+            <span class="t">Direct ingest</span>
+            <span class="d"><span class="m">POST /api/transactions</span> — the operator-facing path.</span>
+          </div>
+        </div>
+
+        <div class="arrow hot" aria-hidden="true">→</div>
+
+        <div class="stage">
+          <div class="stage-label"><span class="num">02</span> Event log</div>
+          <div class="node accent-flow">
+            <span class="t">Kafka / Redpanda</span>
+            <ul>
+              <li><span class="m">topic: transactions</span></li>
+              <li><span class="m">key: cardHash</span> — per-card ordering for the velocity rules</li>
+            </ul>
+          </div>
+          <div class="node">
+            <span class="t">DLQ</span>
+            <span class="d"><span class="m">transactions.dlq</span> — undecodable records parked with origin headers, never dropped.</span>
+          </div>
+        </div>
+
+        <div class="arrow hot" aria-hidden="true">→</div>
+
+        <div class="envelope">
+          <div class="envelope-tag">One Go process · cmd/api</div>
+          <div class="stage-label"><span class="num">03</span> Score &amp; commit</div>
+          <div class="node accent-hot">
+            <span class="t">Consumer loop</span>
+            <ul>
+              <li>Poll → decode (bad → DLQ) → score</li>
+              <li><span class="m">SubmitBatch</span> blocks until scored</li>
+              <li>Flush producers, <strong>then</strong> commit offsets</li>
+              <li>Flush + commit on <span class="m">OnPartitionsRevoked</span></li>
+            </ul>
+          </div>
+          <div class="updown" aria-hidden="true">↕</div>
+          <div class="node">
+            <span class="t">Engine</span>
+            <span class="d">Worker pool (2×CPU) behind a 16,384-slot bounded channel; sliding windows over 256 FNV mutex shards; five additive rules; ~130k/s in-process.</span>
+          </div>
+        </div>
+
+        <div class="arrow hot" aria-hidden="true">→</div>
+
+        <div class="stage">
+          <div class="stage-label"><span class="num">04</span> Outputs</div>
+          <div class="node accent-flow">
+            <span class="t">verdicts topic</span>
+            <span class="d">Every flagged verdict, keyed by <span class="m">TxID</span> so downstream dedupe is possible.</span>
+          </div>
+          <div class="node">
+            <span class="t">Case store</span>
+            <span class="d">In-memory behind a <span class="m">Store</span> interface; <span class="m">schema.sql</span> is the Postgres shape. Opens dedupe by <span class="m">TxID</span>.</span>
+          </div>
+        </div>
+
+        <div class="arrow" aria-hidden="true">→</div>
+
+        <div class="stage">
+          <div class="stage-label"><span class="num">05</span> Console</div>
+          <div class="node accent-ok">
+            <span class="t">React dashboard</span>
+            <ul>
+              <li>One SSE stream feeds a pure reducer</li>
+              <li>Review queue: worst-first, holds still under the pointer</li>
+              <li>Optimistic resolve, rollback on failure</li>
+            </ul>
+          </div>
+          <div class="node accent-ok">
+            <span class="t">Analyst labels</span>
+            <span class="d">Confirmed fraud / false positive — the training data a future ML rule needs.</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <p class="board-caption">
+      The whole product in one glance: five columns, one process boundary. The dashed
+      box is a single binary today and the consumer-group tier of the production shape
+      below tomorrow.
+    </p>
+  </section>
+
+  <section>
+    <h2>One transaction, end to end</h2>
+    <p>
+      The tutorial version: follow a single bet-sized payment through the pipe. Steps
+      are the real order of operations — each one maps to code you can open.
+    </p>
+    <div class="narration">
+      <ol>
+        <li><strong>Produced.</strong> The load generator marshals a transaction and produces it to <span class="m">transactions</span>, keyed by card hash — so this card's events all land in one partition, in order.</li>
+        <li><strong>Fetched.</strong> The consumer polls a batch. Anything that fails to decode is published to <span class="m">transactions.dlq</span> with origin topic/partition/offset headers; it never blocks the batch and never vanishes.</li>
+        <li><strong>Scored.</strong> <span class="m">SubmitBatch</span> fans the batch across the worker pool and blocks until every transaction has run the five-rule chain — amount, card velocity, IP fan-out, geo mismatch, high-risk merchant. Points sum; ≥40 opens a review, ≥70 declines.</li>
+        <li><strong>Made durable, then committed.</strong> Flagged verdicts are published (keyed by <span class="m">TxID</span>) and a case opens, idempotently. The verdict and DLQ producers are flushed, and only then are the offsets committed. Kill the process anywhere in this window and the batch replays — duplicates possible, loss impossible. <span class="m">make e2e</span> proves exactly this with a SIGKILL against a real broker.</li>
+        <li><strong>Streamed.</strong> Once per second the API pushes an SSE frame — stats, recent verdicts, case counts — and the dashboard's reducer applies it. The frame counter doubles as the review queue's refetch signal.</li>
+        <li><strong>Triaged.</strong> The queue lists open cases worst-first and freezes while your pointer is over it. Resolving is optimistic: the row leaves immediately, comes back with an error if the server refused, stays gone with a note if the case was already evicted.</li>
+        <li><strong>Labeled.</strong> The resolution — confirmed fraud or false positive — is stored. That label stream is the feedback loop the whole design points at.</li>
+      </ol>
+    </div>
+
+    <h3 style="margin-top: 0.5rem;">Run it yourself</h3>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Command</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="m">make setup</span></td><td>Install backend and frontend dependencies.</td></tr>
+          <tr><td><span class="m">make run-api</span> + <span class="m">make run-web</span></td><td>Inline mode: engine + API on :8080, console on :5173. Flip the simulator switch and watch the board light up.</td></tr>
+          <tr><td><span class="m">make kafka-up</span> → <span class="m">make kafka-run</span> → <span class="m">make kafka-loadgen</span></td><td>Kafka mode: Redpanda in Docker, the API consuming from the topic, the load generator producing into it.</td></tr>
+          <tr><td><span class="m">make test</span> / <span class="m">make test-web</span></td><td>Go suite / React suite (vitest + Testing Library).</td></tr>
+          <tr><td><span class="m">make e2e</span></td><td>The crash-replay proof: streams transactions, SIGKILLs the real consumer mid-batch, restarts it, and asserts every verdict arrived at least once.</td></tr>
+          <tr><td><span class="m">make bench</span></td><td>In-process engine throughput benchmark.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>The production shape</h2>
+
+    <div class="board-scroll">
+      <div class="pipeline">
+
+        <div class="stage">
+          <div class="stage-label"><span class="num">01</span> Sources</div>
+          <div class="node accent-hot">
+            <span class="t">Game events</span>
+            <span class="d">Bets, round outcomes, seat &amp; table state. The events that need a verdict.</span>
+          </div>
+          <div class="node">
+            <span class="t">Session telemetry</span>
+            <span class="d">Device, IP, client timing, heartbeats. High volume, low value each.</span>
+          </div>
+          <div class="node">
+            <span class="t">Operator callbacks</span>
+            <span class="d">Whatever they feed back — and that boundary is a question to ask, not assume.</span>
+          </div>
+        </div>
+
+        <div class="arrow hot" aria-hidden="true">→</div>
+
+        <div class="stage">
+          <div class="stage-label"><span class="num">02</span> Event log</div>
+          <div class="node accent-flow">
+            <span class="t">Kafka</span>
+            <ul>
+              <li><span class="m">topic: game.events</span></li>
+              <li><span class="m">key: playerId</span> — ordering per player, which the velocity rules require</li>
+              <li><span class="m">partitions: 48</span> — this number is the parallelism cap <em>and</em> the bill</li>
+            </ul>
+          </div>
+          <div class="node">
+            <span class="t">DLQ</span>
+            <span class="d"><span class="m">game.events.dlq</span> — a record you cannot parse is a record you must not silently drop.</span>
+          </div>
+        </div>
+
+        <div class="arrow hot" aria-hidden="true">→</div>
+
+        <div class="envelope">
+          <div class="envelope-tag">Kubernetes · KEDA on lag</div>
+          <div class="stage-label"><span class="num">03</span> Scoring tier</div>
+          <div class="node accent-hot">
+            <span class="t">Go consumer group</span>
+            <ul>
+              <li>Worker pool behind a bounded channel</li>
+              <li>Rule chain: velocity · IP fan-out · jurisdiction · bet sizing · timing</li>
+              <li>Commit <strong>after</strong> scoring, not after enqueue</li>
+              <li>Drain and commit on <span class="m">OnPartitionsRevoked</span></li>
+            </ul>
+          </div>
+          <div class="updown" aria-hidden="true">↕</div>
+          <div class="node accent-flow">
+            <span class="t">Keyed state</span>
+            <span class="d">Sliding windows per player. In-process state dies on every rebalance — so it lives in Redis, or in Flink with checkpoints.</span>
+          </div>
+        </div>
+
+        <div class="arrow hot" aria-hidden="true">→</div>
+
+        <div class="stage">
+          <div class="stage-label"><span class="num">04</span> Verdict</div>
+          <div class="node accent-ok">
+            <span class="t">Additive score</span>
+            <span class="d">Each rule returns points plus a named flag. ≥40 review, ≥70 decline.</span>
+          </div>
+          <div class="node">
+            <span class="t">Explainable by construction</span>
+            <span class="d">The named flags <em>are</em> the audit trail. A regulator asking why you declined gets a list, not a model weight.</span>
+          </div>
+        </div>
+
+        <div class="arrow" aria-hidden="true">→</div>
+
+        <div class="stage">
+          <div class="stage-label"><span class="num">05</span> Sinks</div>
+          <div class="node accent-flow">
+            <span class="t">verdicts topic</span>
+            <span class="d">Keyed by event id. Downstream: alerting, data lake, model training.</span>
+          </div>
+          <div class="node">
+            <span class="t">Case store</span>
+            <span class="d">Postgres. Review queue, worst score first.</span>
+          </div>
+          <div class="node accent-ok">
+            <span class="t">Analyst labels</span>
+            <span class="d">Confirmed fraud / false positive. This is the loop that makes an ML rule possible later.</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="legend">
+      <span><i class="swatch" style="border-color: var(--hot);"></i> Hot path — under the latency budget</span>
+      <span><i class="swatch" style="border-color: var(--flow);"></i> Durable / stateful</span>
+      <span><i class="swatch" style="border-color: var(--ok);"></i> Feedback loop</span>
+    </div>
+
+    <p class="board-caption">
+      Drawable in about three minutes: five columns, one dashed box, one arrow pointing
+      back from labels to rules. If you can't redraw it from memory, it's too complicated
+      to defend.
+    </p>
+  </section>
+
+  <section>
+    <h2>Decisions you have to defend</h2>
+    <p>
+      These are independent, not sequential — expect them in any order, and expect
+      pushback on whichever one you sound least sure about.
+    </p>
+
+    <div class="decisions">
+
+      <div class="decision">
+        <span class="tag">Scale split</span>
+        <p class="q">"Millions of requests per minute" — how much of that actually needs a synchronous decision?</p>
+        <dl>
+          <dt>Why it matters</dt>
+          <dd>If 5% needs a verdict, the hard problem is ~1.6k decisions/sec under an SLO plus cheap bulk ingest. That's a different system than 33k decisions/sec.</dd>
+          <dt>Move</dt>
+          <dd class="pick">Ask before sizing anything. Reframing their number beats being impressed by it.</dd>
+        </dl>
+      </div>
+
+      <div class="decision">
+        <span class="tag">Data boundary</span>
+        <p class="q">The platform provider is B2B. Which signals are actually yours?</p>
+        <dl>
+          <dt>You see</dt>
+          <dd>Bets, rounds, outcomes, table state, device and timing telemetry.</dd>
+          <dt>The operator sees</dt>
+          <dd>Deposits, withdrawals, KYC, payment instruments, cross-operator identity.</dd>
+          <dt>Move</dt>
+          <dd class="pick">Name the boundary before proposing rules. Most candidates will design the operator's system by mistake.</dd>
+        </dl>
+      </div>
+
+      <div class="decision">
+        <span class="tag">State on rebalance</span>
+        <p class="q">Velocity windows are in-process. Partition assignment is dynamic. What happens on a scale event?</p>
+        <dl>
+          <dt>The failure</dt>
+          <dd>A player's window silently resets on whichever pod receives the partition. No error, just worse detection.</dd>
+          <dt>Options</dt>
+          <dd>Shared Redis · Flink keyed state with checkpoints · static assignment and accept it.</dd>
+          <dt>Move</dt>
+          <dd class="pick">Flink — it's on the target stack, and the windowing is the hard part anyway.</dd>
+        </dl>
+      </div>
+
+      <div class="decision">
+        <span class="tag">Partition ceiling</span>
+        <p class="q">Why doesn't HPA-on-CPU work for a Kafka consumer?</p>
+        <dl>
+          <dt>The trap</dt>
+          <dd>A consumer group can't usefully exceed its partition count. Scale to 80 pods against 48 partitions and 32 idle pods still bill you for their requests.</dd>
+          <dt>Generalizes</dt>
+          <dd>Kinesis bills per shard, per hour: 33k/sec needs 34+ shards used or not. Your parallelism ceiling and your bill are the same number.</dd>
+          <dt>Move</dt>
+          <dd class="pick">KEDA on consumer lag, <span class="m">maxReplicas</span> pinned to partition count.</dd>
+        </dl>
+      </div>
+
+      <div class="decision">
+        <span class="tag">Delivery semantics</span>
+        <p class="q">Commit before or after the engine finishes scoring?</p>
+        <dl>
+          <dt>The bug</dt>
+          <dd>Committing after enqueue is at-most-once. A crash drops everything still buffered — in a fraud system, silently. And async producers add a second window: a verdict still in the client buffer dies with the process even though its offset was committed.</dd>
+          <dt>Move</dt>
+          <dd class="pick">At-least-once plus idempotent effects: commit only after scoring, flush the producers before every commit. Same shape as a retried wallet call, which is a connection worth making out loud.</dd>
+        </dl>
+      </div>
+
+      <div class="decision">
+        <span class="tag">Hot key skew</span>
+        <p class="q">You keyed by playerId for ordering. What does a whale do to that?</p>
+        <dl>
+          <dt>The failure</dt>
+          <dd>One player generating 1000× the events pins one partition, and one consumer, while the rest idle. Adding partitions doesn't help.</dd>
+          <dt>Move</dt>
+          <dd class="pick">Name the tension honestly: the key that gives you ordering is the key that gives you skew.</dd>
+        </dl>
+      </div>
+
+      <div class="decision">
+        <span class="tag">Latency budget</span>
+        <p class="q">How long do you actually have?</p>
+        <dl>
+          <dt>The constraint</dt>
+          <dd>Live casino decides inside a betting window. Late betting — exploiting stream delay to bet on a knowable outcome — is the signature attack, and it's a pure timing problem.</dd>
+          <dt>Move</dt>
+          <dd class="pick">Ask for the budget in milliseconds, then design backwards from it.</dd>
+        </dl>
+      </div>
+
+      <div class="decision">
+        <span class="tag">False positive cost</span>
+        <p class="q">Where do you set the threshold?</p>
+        <dl>
+          <dt>The asymmetry</dt>
+          <dd>Blocking a legitimate VIP costs far more than in e-commerce — high-value players are a large share of revenue. The costs are nowhere near symmetric.</dd>
+          <dt>Move</dt>
+          <dd class="pick">Lead with this. Reasoning about thresholds without it sounds like payments fraud experience applied blind.</dd>
+        </dl>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Board vs. what's built</h2>
+    <p>
+      Being straight about the delta is stronger than implying the PoC is production.
+      Know which column each row is in before you're asked.
+    </p>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Status</th>
+            <th>What you say</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Worker-pool engine</td>
+            <td><span class="state have">Built</span></td>
+            <td>Bounded channel, 2×NumCPU workers, 256 FNV mutex shards, atomics on the read path.</td>
+          </tr>
+          <tr>
+            <td>Rule chain</td>
+            <td><span class="state have">Built</span></td>
+            <td>Additive scoring, one file. Four of five rules survive the move to casino; MCC dies because 7995 <em>is</em> gambling.</td>
+          </tr>
+          <tr>
+            <td>Kafka consumer</td>
+            <td><span class="state have">Built</span></td>
+            <td>At-least-once end to end: commit after scoring, DLQ, commit-on-revoke, producers flushed before every commit. Proven by a crash-replay e2e that SIGKILLs the real binary against a real broker.</td>
+          </tr>
+          <tr>
+            <td>React console</td>
+            <td><span class="state have">Built</span></td>
+            <td>SSE into a pure reducer, push-driven review queue that holds still under the pointer, optimistic resolve with rollback. 20 tests.</td>
+          </tr>
+          <tr>
+            <td>Case store + labels</td>
+            <td><span class="state have">Built</span></td>
+            <td>Store interface over MemStore, <span class="m">schema.sql</span> is the Postgres shape. The labels are training data for later.</td>
+          </tr>
+          <tr>
+            <td>Metrics endpoint</td>
+            <td><span class="state gap">Gap</span></td>
+            <td>The counters already exist as atomics. Without exporting them, "monitored" isn't true — and lag-based autoscaling needs them.</td>
+          </tr>
+          <tr>
+            <td>Real e2e ceiling</td>
+            <td><span class="state gap">Unknown</span></td>
+            <td>The crash-replay e2e proves the semantics; the throughput ceiling is still the loadgen flag, not a discovered limit. Push it until it breaks and name the bottleneck.</td>
+          </tr>
+          <tr>
+            <td>Distributed state</td>
+            <td><span class="state talk">Talk track</span></td>
+            <td>In-process today. Redis or Flink in production — and I can explain exactly what breaks without it.</td>
+          </tr>
+          <tr>
+            <td>Kubernetes</td>
+            <td><span class="state talk">Talk track</span></td>
+            <td>Not deployed. The interesting part isn't the manifests, it's that requests are the bill and partitions are the ceiling.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Narrating it</h2>
+    <div class="narration">
+      <p>Six beats, in order, every time you're asked something open-ended:</p>
+      <ol>
+        <li><strong>Restate and bound.</strong> "Scoring bets inline, latency budget matters, we can't lose events. I'll assume under 100ms — correct me."</li>
+        <li><strong>Name the axis before the options.</strong> "The tension is consistency against throughput." This is the beat that reads as senior.</li>
+        <li><strong>Two or three options.</strong> Three is the ceiling. A survey reads as hedging.</li>
+        <li><strong>Pick one, out loud.</strong> "I'd do B."</li>
+        <li><strong>Name the tripwire.</strong> "I'd revisit if whale traffic skews the partitions."</li>
+        <li><strong>Say what you don't know, fast and without apologizing.</strong> "I don't know how MGA treats automated declines for audit — I'd check before designing the appeal path."</li>
+      </ol>
+      <p>
+        Beat six is the one everyone hides and the one that separates senior from mid.
+        Bluffing to a senior reviewer is the only unrecoverable move.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Glossary</h2>
+    <p>
+      Every term on the board. Definitions are written for why the thing matters
+      <em>here</em>, not for a textbook — if a term has a trap attached, the trap is the
+      definition.
+    </p>
+
+    <div class="glossary">
+
+      <div class="gloss-group g-stream">
+        <div class="head">Event streaming</div>
+        <dl>
+          <dt>Topic</dt>
+          <dd>A named stream of records. <span class="m">game.events</span> in, <span class="m">verdicts</span> out.</dd>
+
+          <dt>Partition</dt>
+          <dd>The unit of both parallelism and ordering inside a topic. Records are ordered within a partition, and <em>not</em> ordered across them.</dd>
+
+          <dt>Key</dt>
+          <dd>The field that decides which partition a record lands in. Same key, same partition, so ordering is guaranteed per key — which is why velocity rules need <span class="m">playerId</span> as the key.</dd>
+
+          <dt>Consumer group</dt>
+          <dd>A set of consumers splitting a topic's partitions, where each partition goes to exactly one member at a time. That "exactly one" is where the scaling ceiling comes from.</dd>
+
+          <dt>Offset</dt>
+          <dd>Your position in a partition. <em>Committing</em> an offset tells the broker you're done up to that point — so <em>when</em> you commit is what determines your delivery guarantee.</dd>
+
+          <dt>Consumer lag</dt>
+          <dd>How far behind the head of the partition you are, in records. The single best health metric for a streaming system, and the right thing to autoscale on.</dd>
+
+          <dt>Rebalance</dt>
+          <dd>Reassignment of partitions when group membership changes. Every deploy, crash, and scale event causes one — which is why anything held in process memory is at risk.</dd>
+
+          <dt><span class="m">OnPartitionsRevoked</span></dt>
+          <dd>The callback fired just before a partition is taken from you. Your last chance to finish in-flight work and commit. Not having one is a silent data-loss window.</dd>
+
+          <dt>DLQ — dead letter queue</dt>
+          <dd>A side topic for records you can't process, so a poison record neither blocks the stream nor disappears without trace.</dd>
+
+          <dt>At-most-once</dt>
+          <dd>Commit before processing. Crash and the record is gone. Almost never what you want, and easy to build by accident.</dd>
+
+          <dt>At-least-once</dt>
+          <dd>Commit after processing. Crash and you reprocess — so you may see a record twice. The usual correct choice, <em>provided</em> the work is idempotent.</dd>
+
+          <dt>Exactly-once</dt>
+          <dd>Kafka can give you this within a read-process-write transaction. It doesn't extend to side effects outside Kafka, which is why people over-trust it.</dd>
+
+          <dt>Idempotent</dt>
+          <dd>Doing it twice has the same effect as doing it once. What makes at-least-once safe, and the same property a retried wallet call needs.</dd>
+
+          <dt>Hot key / skew</dt>
+          <dd>One key producing far more traffic than the rest, pinning one partition and one consumer while others idle. Adding partitions doesn't help. A whale does exactly this.</dd>
+
+          <dt>Backpressure</dt>
+          <dd>Letting slowness travel upstream instead of buffering without limit. Here: a bounded channel, so polling slows and lag becomes visible rather than the process running out of memory.</dd>
+
+          <dt>Flink</dt>
+          <dd>A stream processor that owns your per-key state for you and restores it after failure or reassignment. On the target stack, and the direct fix for state dying on rebalance.</dd>
+
+          <dt>Keyed state</dt>
+          <dd>State the framework holds per key and moves with the key when partitions are reassigned. The thing in-process maps can't do.</dd>
+
+          <dt>Checkpoint</dt>
+          <dd>A periodic consistent snapshot of that state, replayed on recovery. What makes keyed state survive a crash.</dd>
+
+          <dt>Changelog topic</dt>
+          <dd>Kafka Streams' version of the same idea — state changes written to a compacted topic so another instance can rebuild from it.</dd>
+        </dl>
+      </div>
+
+      <div class="gloss-group g-scale">
+        <div class="head">Scaling &amp; cost</div>
+        <dl>
+          <dt>Pod</dt>
+          <dd>The unit Kubernetes schedules and scales. Here, one consumer process.</dd>
+
+          <dt>Replica</dt>
+          <dd>How many copies of a pod are running. For a consumer group, more than the partition count buys nothing.</dd>
+
+          <dt>HPA — Horizontal Pod Autoscaler</dt>
+          <dd>Kubernetes' built-in scaler, on CPU by default. The wrong signal for a Kafka consumer: a backed-up consumer can be lagging badly at low CPU.</dd>
+
+          <dt>KEDA</dt>
+          <dd>Event-driven autoscaling that reads external metrics like consumer lag, and can scale to zero. The right scaler here.</dd>
+
+          <dt><span class="m">maxReplicas</span></dt>
+          <dd>The scaler's upper bound. Pin it to the partition count, or you pay for pods that are structurally incapable of doing work.</dd>
+
+          <dt>Requests</dt>
+          <dd>CPU and memory the scheduler <em>reserves</em> for a pod, used or not. Requests decide how many nodes you rent, so <em>requests are the bill</em>.</dd>
+
+          <dt>Limits</dt>
+          <dd>The hard ceiling. Exceed the CPU limit and you're throttled; exceed the memory limit and the kernel kills the container.</dd>
+
+          <dt>Cluster Autoscaler</dt>
+          <dd>Adds and removes <em>nodes</em> when pods can't be scheduled. Where HPA stops and the actual cloud bill starts.</dd>
+
+          <dt>Bin packing</dt>
+          <dd>Fitting pods onto as few nodes as possible. Over-stated requests wreck it — every pod reserves room it never uses.</dd>
+
+          <dt>Kinesis shard</dt>
+          <dd>AWS's partition equivalent: 1 MB/sec or 1,000 records/sec, billed per shard-hour whether you use it or not. 33k/sec needs 34+ shards. Makes the ceiling-equals-bill point unusually literal.</dd>
+
+          <dt>MSK</dt>
+          <dd>Managed Kafka on AWS. Same shape, billed per broker instead of per shard.</dd>
+        </dl>
+      </div>
+
+      <div class="gloss-group g-engine">
+        <div class="head">The engine</div>
+        <dl>
+          <dt>Worker pool</dt>
+          <dd>A fixed set of goroutines pulling from one queue, rather than a goroutine per request. Bounds concurrency instead of letting load decide it.</dd>
+
+          <dt>Bounded channel</dt>
+          <dd>The queue in front of those workers, with a fixed capacity (16,384 here). Full means the producer waits — that's backpressure working.</dd>
+
+          <dt>Sharded state</dt>
+          <dd>Sliding-window counters split across 256 mutex shards keyed by FNV hash, so workers don't contend on one lock.</dd>
+
+          <dt>FNV</dt>
+          <dd>A fast non-cryptographic hash. Used only to pick a shard, so speed matters and collision resistance doesn't.</dd>
+
+          <dt>Atomics</dt>
+          <dd>Lock-free counters. Let the stats endpoint read without ever stalling the scoring path.</dd>
+
+          <dt>Sliding window</dt>
+          <dd>"How many events for this key in the last N seconds." The core primitive under every velocity rule, and the state that rebalancing destroys.</dd>
+
+          <dt>Additive scoring</dt>
+          <dd>Each rule returns points plus a named flag; the points sum to a verdict. Tunable in one file, and explainable by construction.</dd>
+
+          <dt>Velocity rule</dt>
+          <dd>Rate of events per key over a window. Catches bursts a per-event rule can't see.</dd>
+
+          <dt>IP fan-out</dt>
+          <dd>One IP touching many distinct accounts. The multi-accounting signal, and the enabler under most collusion.</dd>
+
+          <dt>Jurisdiction check</dt>
+          <dd>Is this player playing from somewhere the licence covers? A compliance requirement first and a fraud signal second.</dd>
+
+          <dt>p50 / p99</dt>
+          <dd>Median and 99th-percentile latency. p99 is the one that matters — it's the experience of the unluckiest 1%, and averages hide it completely.</dd>
+
+          <dt>Latency budget</dt>
+          <dd>The total time available before the decision is worthless. In live casino it's set by the betting window, not by preference.</dd>
+
+          <dt>SLO</dt>
+          <dd>The target you commit to and alert on, e.g. "p99 scoring under 50µs". Distinct from what you happen to measure once.</dd>
+
+          <dt>False positive</dt>
+          <dd>Blocking a legitimate player. Costs are wildly asymmetric here — one blocked VIP can outweigh many missed small frauds.</dd>
+        </dl>
+      </div>
+
+      <div class="gloss-group g-domain">
+        <div class="head">Live casino domain</div>
+        <dl>
+          <dt>Operator</dt>
+          <dd>The consumer-facing casino brand. Owns the player relationship: deposits, withdrawals, KYC, self-exclusion.</dd>
+
+          <dt>Provider / supplier</dt>
+          <dd>The company building the games and platform the operator serves. The side this system sits on — and the side whose data it actually has.</dd>
+
+          <dt>Live casino</dt>
+          <dd>Real dealers, real tables, streamed to players in real time. Physical equipment and video delay both become attack surface.</dd>
+
+          <dt>Betting window</dt>
+          <dd>The seconds in which a bet is accepted for a round. Your latency budget, handed to you by the game.</dd>
+
+          <dt>Late betting</dt>
+          <dd>Exploiting stream delay to place a bet once the outcome is already knowable. The signature live-casino attack, and purely a timing problem.</dd>
+
+          <dt>Multi-accounting</dt>
+          <dd>One person running several accounts. Rarely the end goal — it's the setup for collusion, chip dumping, or promo abuse.</dd>
+
+          <dt>Collusion</dt>
+          <dd>Players coordinating across seats at a table, or occupying every seat to control the game.</dd>
+
+          <dt>Chip dumping</dt>
+          <dd>Deliberately losing to a confederate to move value between accounts. A laundering pattern, not a gambling one.</dd>
+
+          <dt>Bot play</dt>
+          <dd>Scripted clients playing optimal strategy. Shows up in timing distributions — telemetry that is genuinely yours.</dd>
+
+          <dt>Whale / VIP</dt>
+          <dd>A very high-value player. Drives the false-positive asymmetry, and drives partition skew.</dd>
+
+          <dt>KYC / AML</dt>
+          <dd>Know Your Customer and Anti-Money-Laundering — identity and source-of-funds obligations. The operator's, mostly, which is exactly why the data boundary matters.</dd>
+
+          <dt>MGA · UKGC · Spelinspektionen</dt>
+          <dd>Regulators for Malta, the UK, and Sweden. They set what you must be able to prove after the fact, which is why explainability isn't optional.</dd>
+
+          <dt>Verdict</dt>
+          <dd>The output: approve, review, or decline. Review is the interesting one — it's a human queue, not a block.</dd>
+
+          <dt>Case</dt>
+          <dd>A flagged verdict an analyst works, worst score first.</dd>
+
+          <dt>Label</dt>
+          <dd>The analyst's resolution — confirmed fraud or false positive. This is the loop that makes a model possible later, and why the queue is worth building before the model.</dd>
+        </dl>
+      </div>
+
+    </div>
+  </section>
+
+  <footer>
+    Lambari · architecture board and end-to-end guide. Scale figures are
+    from the repo benchmarks; partition and shard numbers are worked examples, not
+    measurements.
+  </footer>
+
+</div>
+
