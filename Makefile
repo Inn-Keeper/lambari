@@ -1,4 +1,4 @@
-.PHONY: setup build run-api run-web sim bench test loadgen kafka-up kafka-run
+.PHONY: setup build run-api run-web sim bench test loadgen kafka-up kafka-run e2e
 
 setup:            ## install backend + frontend dependencies
 	cd backend && go mod tidy
@@ -33,3 +33,7 @@ kafka-run:        ## run the API consuming from Kafka
 
 kafka-loadgen:    ## produce 5000 tx/s into the transactions topic
 	cd backend && go run ./cmd/loadgen -rate 5000 -duration 30s -kafka localhost:19092
+
+e2e:              ## crash-replay at-least-once test against Redpanda (SIGKILLs a real consumer)
+	docker compose up -d --wait redpanda
+	cd backend && LAMBARI_KAFKA_BROKERS=localhost:19092 go test -run TestCrashReplayAtLeastOnce -v -timeout 5m -count=1 ./internal/kafka/

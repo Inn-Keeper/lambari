@@ -23,6 +23,11 @@ transaction; duplicates are permitted and made harmless.
 - `kgo.OnPartitionsRevoked` commits uncommitted offsets before a rebalance
   hands partitions to another member, bounding redelivery to the one in-flight
   batch.
+- **Flush before commit** (added during implementation): verdict and DLQ
+  publishes are async and buffered; both producers are flushed before every
+  offset commit (including the revoke hook), otherwise a crash right after a
+  commit silently loses the buffered publishes the commit covered. If the
+  flush fails, the commit is skipped — replay on restart, never loss.
 
 ## Idempotency: effect-level, not dedup
 
@@ -67,15 +72,24 @@ End-to-end (new): `backend/internal/kafka/e2e_test.go`, skipped unless
 `LAMBARI_KAFKA_BROKERS` is set. Against the repo's Redpanda
 (`localhost:19092`):
 
-1. Produce ~500 transactions with unique `TxID`s, crafted to always flag.
-2. Run consumer 1 with `engine.OnFlagged` collecting scored TxIDs; cancel its
-   context mid-stream — after some records scored, before the tail is
-   committed. That lands in the exact crash window (scored-but-uncommitted).
-3. Run consumer 2, same group, fresh engine; it resumes from the last commit
-   and replays the uncommitted tail.
-4. Assert every produced `TxID` was scored at least once across both runs;
-   report the duplicate count (duplicates are expected — that *is* the
-   semantics).
+1. Build the real `cmd/api` binary — the test exercises production wiring,
+   not a test-only consumer. An in-process context-cancel cannot simulate a
+   crash: graceful shutdown (correctly) commits via the revoke hook, so the
+   process must die by SIGKILL.
+2. Stream a first wave of 5,000 transactions with unique `TxID`s, crafted to
+   always flag (`Amount ≥ 5000`), *while* the consumer is live — a
+   pre-produced wave would arrive as one giant fetch, scored and committed in
+   milliseconds, leaving the kill nothing to catch. SIGKILL the api once a
+   fifth of the verdicts have appeared on the `verdicts` topic.
+3. Produce a second wave of 5,000 while the consumer is down, then start a
+   fresh api process (same consumer group); it resumes from the last commit
+   and picks up everything the dead process never committed.
+4. A group-less watcher tails the `verdicts` topic and asserts every one of
+   the 10,000 `TxID`s appears at least once — that assertion is the
+   invariant (loss = at-most-once bug). Duplicate publishes are reported,
+   not required: they occur only when the kill lands inside a
+   poll-score-commit cycle a few milliseconds wide, and are legal — that
+   *is* the semantics.
 
 `make e2e` brings up Redpanda and runs the test.
 

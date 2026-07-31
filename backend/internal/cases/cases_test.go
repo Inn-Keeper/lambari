@@ -34,6 +34,23 @@ func TestOpenResolveFlow(t *testing.T) {
 	}
 }
 
+// Under at-least-once delivery the same verdict can arrive twice (crash
+// between scoring and offset commit). Open must be idempotent per TxID or
+// every replay would fork a duplicate case for the analyst queue.
+func TestOpenIsIdempotentPerTxID(t *testing.T) {
+	s := NewMemStore(10)
+	s.Open(v("tx_dup", 50))
+	s.Open(v("tx_dup", 90)) // redelivery of the same transaction
+	open, _, _ := s.Counts()
+	if open != 1 {
+		t.Fatalf("duplicate verdict opened %d cases, want 1", open)
+	}
+	got := s.List(Open, 10)
+	if len(got) != 1 || got[0].Verdict.Score != 50 {
+		t.Fatalf("first verdict must win, got %+v", got)
+	}
+}
+
 func TestEvictionKeepsNewest(t *testing.T) {
 	s := NewMemStore(3)
 	for i := 0; i < 5; i++ {

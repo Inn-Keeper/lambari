@@ -32,17 +32,24 @@ func main() {
 	var verdictPub *kafka.VerdictProducer
 	if brokers != "" {
 		mode = "kafka"
-		consumer, err := kafka.NewConsumer(strings.Split(brokers, ","), eng)
+		seeds := strings.Split(brokers, ",")
+		dlq, err := kafka.NewDLQProducer(seeds)
+		if err != nil {
+			slog.Error("dlq producer failed", "err", err)
+			os.Exit(1)
+		}
+		defer dlq.Close()
+		if verdictPub, err = kafka.NewVerdictProducer(seeds); err != nil {
+			slog.Error("verdict producer failed", "err", err)
+			os.Exit(1)
+		}
+		consumer, err := kafka.NewConsumer(seeds, eng, dlq, verdictPub)
 		if err != nil {
 			slog.Error("kafka connect failed", "err", err)
 			os.Exit(1)
 		}
 		go consumer.Run(ctx)
-		if verdictPub, err = kafka.NewVerdictProducer(strings.Split(brokers, ",")); err != nil {
-			slog.Error("verdict producer failed", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("kafka wired", "brokers", brokers, "in", kafka.Topic, "out", kafka.VerdictTopic)
+		slog.Info("kafka wired", "brokers", brokers, "in", kafka.Topic, "out", kafka.VerdictTopic, "dlq", kafka.DLQTopic)
 	}
 
 	// every flagged verdict opens a case; in kafka mode it's also published

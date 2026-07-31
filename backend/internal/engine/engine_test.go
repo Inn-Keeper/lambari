@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,6 +71,51 @@ func TestDecideThresholds(t *testing.T) {
 			t.Errorf("Decide(%d) = %s, want %s", c.score, got, c.want)
 		}
 	}
+}
+
+// SubmitBatch is what lets a Kafka consumer commit offsets safely: it must not
+// return until every transaction in the batch has actually been scored.
+// Returning early is at-most-once — a crash after the commit loses whatever is
+// still sitting in the buffer, silently.
+func TestSubmitBatchReturnsOnlyAfterScoring(t *testing.T) {
+	e := New()
+	release := make(chan struct{})
+	var scored atomic.Int64
+	e.rules = []Rule{func(_ *model.Transaction, _ *State) (int, string) {
+		<-release
+		scored.Add(1)
+		return 0, ""
+	}}
+	e.Start()
+
+	txs := make([]model.Transaction, 8)
+	for i := range txs {
+		txs[i] = benignTx(i)
+	}
+
+	returned := make(chan struct{})
+	go func() {
+		e.SubmitBatch(txs)
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+		t.Fatal("SubmitBatch returned while scoring was still blocked — committing offsets here would be at-most-once")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SubmitBatch never returned after scoring was released")
+	}
+
+	if got := scored.Load(); got != int64(len(txs)) {
+		t.Fatalf("SubmitBatch returned with %d of %d scored", got, len(txs))
+	}
+	e.Stop()
 }
 
 func waitProcessed(t *testing.T, e *Engine, n int64) {

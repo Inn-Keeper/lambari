@@ -13,8 +13,15 @@ import (
 // Engine is a bounded worker pool that scores transactions concurrently.
 // Ingest is non-blocking up to the buffer size; beyond that, backpressure
 // applies (Submit blocks), which is exactly what you want in front of Kafka.
+// job carries one transaction to a worker. wg is non-nil only for batch
+// submissions, where the caller needs to know when scoring actually finished.
+type job struct {
+	tx model.Transaction
+	wg *sync.WaitGroup
+}
+
 type Engine struct {
-	in    chan model.Transaction
+	in    chan job
 	rules []Rule
 	state *State
 	done  chan struct{}
@@ -57,7 +64,7 @@ const (
 
 func New() *Engine {
 	e := &Engine{
-		in:        make(chan model.Transaction, bufferSize),
+		in:        make(chan job, bufferSize),
 		rules:     DefaultRules(),
 		state:     NewState(),
 		done:      make(chan struct{}),
@@ -95,24 +102,41 @@ func (e *Engine) Stop() {
 }
 
 // Submit queues one transaction. Blocks only when the buffer is full.
+// Fire-and-forget: it returns once the transaction is queued, not scored.
 func (e *Engine) Submit(tx model.Transaction) {
-	e.in <- tx
+	e.in <- job{tx: tx}
 }
 
 // TrySubmit queues without blocking; returns false if the engine is saturated.
 func (e *Engine) TrySubmit(tx model.Transaction) bool {
 	select {
-	case e.in <- tx:
+	case e.in <- job{tx: tx}:
 		return true
 	default:
 		return false
 	}
 }
 
+// SubmitBatch queues every transaction and blocks until all of them have been
+// scored. Callers that own an offset — the Kafka consumer — need this: they
+// can only commit once the work is genuinely done, otherwise a crash silently
+// discards whatever is still buffered.
+func (e *Engine) SubmitBatch(txs []model.Transaction) {
+	var wg sync.WaitGroup
+	wg.Add(len(txs))
+	for _, tx := range txs {
+		e.in <- job{tx: tx, wg: &wg}
+	}
+	wg.Wait()
+}
+
 func (e *Engine) worker() {
 	defer e.wg.Done()
-	for tx := range e.in {
-		e.score(&tx)
+	for j := range e.in {
+		e.score(&j.tx)
+		if j.wg != nil {
+			j.wg.Done()
+		}
 	}
 }
 
