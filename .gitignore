@@ -6,3 +6,4 @@ backend/loadgen
 .DS_Store
 ._*
 *.tsbuildinfo
+.playwright-mcp/
