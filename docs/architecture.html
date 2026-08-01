@@ -645,6 +645,10 @@
             <span class="t">Analyst labels</span>
             <span class="d">Confirmed fraud / false positive — the training data a future ML rule needs.</span>
           </div>
+          <div class="node accent-flow">
+            <span class="t">/metrics</span>
+            <span class="d">Prometheus scrape: counters, queue depth, latency buckets, consumer lag. What an autoscaler reads.</span>
+          </div>
         </div>
 
       </div>
@@ -688,6 +692,7 @@
           <tr><td><span class="m">make test</span> / <span class="m">make test-web</span></td><td>Go suite / React suite (vitest + Testing Library).</td></tr>
           <tr><td><span class="m">make e2e</span></td><td>The crash-replay proof: streams transactions, SIGKILLs the real consumer mid-batch, restarts it, and asserts every verdict arrived at least once.</td></tr>
           <tr><td><span class="m">make bench</span></td><td>In-process engine throughput benchmark.</td></tr>
+          <tr><td><span class="m">curl localhost:8080/metrics</span></td><td>The scrape: counters, queue depth, a bucketed scoring-latency histogram, and — in Kafka mode — consumer lag per partition plus a total.</td></tr>
         </tbody>
       </table>
     </div>
@@ -952,8 +957,8 @@
           </tr>
           <tr>
             <td>Metrics endpoint</td>
-            <td><span class="state gap">Gap</span></td>
-            <td>The counters already exist as atomics. Without exporting them, "monitored" isn't true — and lag-based autoscaling needs them.</td>
+            <td><span class="state have">Built</span></td>
+            <td><span class="m">GET /metrics</span> in Prometheus text format, hand-written to keep the repo at one dependency. Latency ships as real histogram buckets, not a per-pod percentile — those can't be aggregated. Consumer lag comes from the high watermark every fetch already carries, so KEDA has its signal for free.</td>
           </tr>
           <tr>
             <td>Real e2e ceiling</td>
