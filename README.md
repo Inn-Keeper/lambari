@@ -168,13 +168,34 @@ correctly commits on the way out, so the test kills by signal.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/transactions` | Batch JSON ingest (the HTTP IO path) |
+| `POST /api/transactions` | Batch JSON ingest (the HTTP IO path). `503 + Retry-After` when saturated — see below |
 | `POST /api/simulate` | `{"rate": 5000}` starts the built-in generator, `0` stops |
 | `GET /api/stats` | Engine snapshot |
 | `GET /api/stream` | SSE: stats + recent verdicts + case counts every 400ms |
 | `GET /api/cases` | Review queue (`?status=resolved` for labeled history) |
 | `POST /api/cases/{id}/resolve` | `{"resolution":"confirmed_fraud"\|"false_positive"}` |
 | `GET /metrics` | Prometheus scrape (root-level by convention, not under `/api`) |
+
+### Backpressure at the ingest boundary
+
+When the engine's buffer is full, `POST /api/transactions` accepts a **prefix**
+of the batch and sheds the rest, answering `503` with `Retry-After: 1` and
+`{"accepted": N, "rejected": M}`. Accepting a prefix rather than scattered
+transactions is what makes `accepted: N` actionable — it means "the first N,
+resend from there".
+
+503 rather than 429 because the constraint is this server's capacity, not this
+caller's rate. Retrying is safe by construction: cases dedupe on transaction id
+and verdicts are keyed by it, so a partially-landed batch cannot double-count
+on the way back. Shed load is counted in `lambari_submissions_rejected_total`.
+
+The Kafka path deliberately answers the same question differently — it
+*blocks* (`SubmitBatch`) rather than shedding. One consumer loop slowing down
+turns into consumer lag: visible, alertable, and already wired to autoscaling.
+Blocking at an HTTP boundary would instead spread the pressure across N
+uncoordinated callers as latency creep until their timeouts fire, telling
+nobody to slow down. Same problem, opposite answer, because the context
+differs.
 
 ### Metrics
 
@@ -224,11 +245,9 @@ interesting than pretending there isn't one:
   from zero: no error, just quietly worse detection. Redis with a pipelined
   sliding window, or Flink keyed state with checkpoints, is the real fix — and
   the honest question is what distributing that state costs in throughput.
-- **The ingest path sheds load rather than pushing back.** When the engine's
-  buffer fills, `/api/transactions` drops the overflow and reports it in the
-  response body while still returning 200. Deliberate, but a caller that
-  ignores the body sees a success — a 429 would be harder to miss, and shed
-  load deserves its own counter in `/metrics`.
+- **The case store is in memory.** Cases and their labels do not survive a
+  restart. `schema.sql` is the Postgres shape; the `Store` interface is the
+  swap point.
 - Swap `cases.MemStore` for a pgx implementation of `cases.Store`
   (`schema.sql` is ready)
 - A Python sidecar serving an ML model as one more `Rule` in the chain,

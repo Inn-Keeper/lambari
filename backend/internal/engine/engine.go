@@ -32,6 +32,10 @@ type Engine struct {
 	approved  atomic.Int64
 	reviewed  atomic.Int64
 	declined  atomic.Int64
+	// rejected counts transactions refused because the buffer was full. Shed
+	// load that nobody counts is indistinguishable from load that never
+	// arrived.
+	rejected atomic.Int64
 
 	// per-rule fire counts
 	ruleMu    sync.Mutex
@@ -112,6 +116,7 @@ func (e *Engine) Submit(tx model.Transaction) {
 }
 
 // TrySubmit queues without blocking; returns false if the engine is saturated.
+// A false is shed load: report it with RecordRejected.
 func (e *Engine) TrySubmit(tx model.Transaction) bool {
 	select {
 	case e.in <- job{tx: tx}:
@@ -120,6 +125,13 @@ func (e *Engine) TrySubmit(tx model.Transaction) bool {
 		return false
 	}
 }
+
+// RecordRejected accounts for transactions dropped because the engine was
+// saturated. Callers report it rather than TrySubmit counting itself, because
+// a caller that stops offering a batch at the first refusal knows how many it
+// gave up on — and that total, not the number of refusals it happened to
+// observe, is the shed load worth alerting on.
+func (e *Engine) RecordRejected(n int) { e.rejected.Add(int64(n)) }
 
 // SubmitBatch queues every transaction and blocks until all of them have been
 // scored. Callers that own an offset — the Kafka consumer — need this: they
@@ -231,6 +243,7 @@ type Stats struct {
 	Approved    int64            `json:"approved"`
 	Reviewed    int64            `json:"reviewed"`
 	Declined    int64            `json:"declined"`
+	Rejected    int64            `json:"rejected"` // shed: buffer was full
 	RatePerSec  int64            `json:"rate_per_sec"`
 	P50US       int64            `json:"p50_us"`
 	P99US       int64            `json:"p99_us"`
@@ -270,6 +283,7 @@ func (e *Engine) Snapshot() Stats {
 
 	return Stats{
 		Processed: p, Approved: e.approved.Load(), Reviewed: rev, Declined: dec,
+		Rejected:   e.rejected.Load(),
 		RatePerSec: e.lastRate.Load(), P50US: p50, P99US: p99,
 		QueueDepth: len(e.in), QueueCap: cap(e.in),
 		UptimeSec: int64(time.Since(e.startedAt).Seconds()),

@@ -116,28 +116,7 @@ func main() {
 			Transport: &http.Transport{MaxIdleConnsPerHost: *workers, MaxConnsPerHost: *workers},
 		}
 		url := *target + "/api/transactions"
-		send = func(batch []model.Transaction) (int, error) {
-			b, err := json.Marshal(batch)
-			if err != nil {
-				return 0, err
-			}
-			resp, err := client.Post(url, "application/json", bytes.NewReader(b))
-			if err != nil {
-				return 0, err
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode >= 300 {
-				return 0, fmt.Errorf("ingest returned %s", resp.Status)
-			}
-			// Ingest sheds load when the engine's buffer is full and says so in
-			// the body while still returning 200. Ignoring that is how a load
-			// test reports throughput the system never actually did.
-			var res struct{ Accepted, Rejected int }
-			if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-				return 0, fmt.Errorf("decode ingest response: %w", err)
-			}
-			return res.Rejected, nil
-		}
+		send = httpSender(client, url)
 		fmt.Printf("posting to %s · %s · %d workers\n", url, rateLabel(*rate), *workers)
 	}
 
@@ -157,6 +136,36 @@ func main() {
 	wg.Wait()
 
 	report(time.Since(start), *rate, sent.Load(), failed.Load(), rejected.Load(), asyncFailures)
+}
+
+// httpSender posts a batch and reports how much of it the server shed.
+//
+// A 503 here is not a failure: ingest sheds load when the engine's buffer is
+// full and says how much in the body. Treating it as a dead request would
+// under-report throughput as badly as ignoring it over-reports it.
+func httpSender(client *http.Client, url string) func([]model.Transaction) (int, error) {
+	return func(batch []model.Transaction) (int, error) {
+		b, err := json.Marshal(batch)
+		if err != nil {
+			return 0, err
+		}
+		resp, err := client.Post(url, "application/json", bytes.NewReader(b))
+		if err != nil {
+			return 0, err
+		}
+		defer resp.Body.Close()
+
+		switch {
+		case resp.StatusCode == http.StatusOK, resp.StatusCode == http.StatusServiceUnavailable:
+			var res struct{ Accepted, Rejected int }
+			if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+				return 0, fmt.Errorf("decode ingest response: %w", err)
+			}
+			return res.Rejected, nil
+		default:
+			return 0, fmt.Errorf("ingest returned %s", resp.Status)
+		}
+	}
 }
 
 func runWorker(

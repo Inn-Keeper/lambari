@@ -30,6 +30,11 @@ func Write(w io.Writer, s engine.Stats, h engine.Histogram, lag map[int32]int64)
 	value(b, "decisions_total", label("decision", "review"), s.Reviewed)
 	value(b, "decisions_total", label("decision", "decline"), s.Declined)
 
+	// Shed load belongs next to the throughput it was shed from: a scored
+	// count that keeps climbing tells you nothing on its own.
+	counter(b, "submissions_rejected_total", "Transactions refused because the engine's buffer was full.")
+	value(b, "submissions_rejected_total", "", s.Rejected)
+
 	counter(b, "rule_fires_total", "Times each rule contributed points to a score.")
 	for _, name := range sortedKeys(s.RuleFires) {
 		value(b, "rule_fires_total", label("rule", name), s.RuleFires[name])

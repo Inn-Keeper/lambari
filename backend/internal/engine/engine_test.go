@@ -148,3 +148,27 @@ func BenchmarkEngineThroughput(b *testing.B) {
 	b.StopTimer()
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "tx/sec")
 }
+
+// Shed load that nobody counts makes a saturated engine look identical to an
+// idle one — the transactions simply never appear anywhere.
+func TestRecordRejectedAccumulates(t *testing.T) {
+	e := New() // no Start: nothing drains the buffer, so it fills and stays full
+	filled := 0
+	for e.TrySubmit(benignTx(filled)) {
+		filled++
+	}
+	if filled == 0 {
+		t.Fatal("buffer refused the very first transaction")
+	}
+	if got := e.Snapshot().Rejected; got != 0 {
+		t.Fatalf("Rejected = %d before anything was reported, want 0", got)
+	}
+
+	// A caller that gave up on the rest of a 40-transaction batch reports all
+	// 40, not the single refusal it happened to observe.
+	e.RecordRejected(40)
+	e.RecordRejected(2)
+	if got := e.Snapshot().Rejected; got != 42 {
+		t.Fatalf("Rejected = %d, want 42", got)
+	}
+}

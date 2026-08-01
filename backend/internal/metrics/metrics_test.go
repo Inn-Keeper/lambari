@@ -9,7 +9,7 @@ import (
 
 func sampleStats() engine.Stats {
 	return engine.Stats{
-		Processed: 100, Approved: 90, Reviewed: 8, Declined: 2,
+		Processed: 100, Approved: 90, Reviewed: 8, Declined: 2, Rejected: 17,
 		RatePerSec: 5000, P50US: 3, P99US: 40,
 		QueueDepth: 12, QueueCap: 16384, UptimeSec: 60,
 		RuleFires: map[string]int64{"amount_high": 7, "geo_mismatch": 3},
@@ -52,6 +52,9 @@ func TestWriteExposesEngineCounters(t *testing.T) {
 		`lambari_decisions_total{decision="approve"} 90`,
 		`lambari_decisions_total{decision="review"} 8`,
 		`lambari_decisions_total{decision="decline"} 2`,
+		// shed load must be visible, or a saturated engine looks like an idle one
+		"# TYPE lambari_submissions_rejected_total counter",
+		"lambari_submissions_rejected_total 17",
 		`lambari_rule_fires_total{rule="amount_high"} 7`,
 		`lambari_rule_fires_total{rule="geo_mismatch"} 3`,
 		"lambari_queue_depth 12",

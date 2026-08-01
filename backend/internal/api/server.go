@@ -95,16 +95,37 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid JSON body, expected array of transactions"}`, http.StatusBadRequest)
 		return
 	}
+	// Accept a prefix and stop at the first refusal, so "accepted: N" means
+	// "the first N — resend from there". Scattered acceptance would leave the
+	// caller holding a count it cannot act on.
 	accepted := 0
 	for i := range txs {
 		if txs[i].Timestamp.IsZero() {
 			txs[i].Timestamp = time.Now()
 		}
-		if s.eng.TrySubmit(txs[i]) {
-			accepted++
+		if !s.eng.TrySubmit(txs[i]) {
+			break
 		}
+		accepted++
 	}
-	writeJSON(w, map[string]any{"accepted": accepted, "rejected": len(txs) - accepted})
+
+	rejected := len(txs) - accepted
+	status := http.StatusOK
+	if rejected > 0 {
+		// Count the whole remainder, not just the one refusal we saw: the rest
+		// of the batch was shed without ever being offered.
+		s.eng.RecordRejected(rejected)
+		// The engine is at capacity — a fact about this server, not about this
+		// caller's rate, so 503 rather than 429. Returning 200 with the count
+		// buried in the body is how a client misses it entirely.
+		//
+		// Retrying is safe by construction: cases dedupe on transaction id and
+		// verdicts are keyed by it, so a batch that partially landed cannot
+		// double-count on the way back.
+		w.Header().Set("Retry-After", "1")
+		status = http.StatusServiceUnavailable
+	}
+	writeJSONStatus(w, status, map[string]any{"accepted": accepted, "rejected": rejected})
 }
 
 // simulate starts/stops the built-in generator. Body: {"rate": 5000} tx/sec, {"rate": 0} stops.
@@ -231,7 +252,15 @@ func (s *Server) resolveCase(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
+	writeJSONStatus(w, http.StatusOK, v)
+}
+
+// writeJSONStatus sets the content type before the status line — headers set
+// after WriteHeader are silently dropped, which would leave the body sniffed
+// instead of typed.
+func writeJSONStatus(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Error("write response", "err", err)
 	}

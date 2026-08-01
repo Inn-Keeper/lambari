@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -103,5 +106,36 @@ func TestWorkerCountsTransportErrorsAsFailures(t *testing.T) {
 	}
 	if failed.Load() != 10 {
 		t.Errorf("failed = %d, want 10 (2 sends × 5)", failed.Load())
+	}
+}
+
+// Ingest answers 503 when the engine's buffer is full, with the shed count in
+// the body. Treating that as a dead request would under-report throughput as
+// badly as ignoring it over-reports it.
+func TestHTTPSenderTreats503AsPartialAcceptance(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprint(w, `{"accepted":6,"rejected":4}`)
+	}))
+	defer srv.Close()
+
+	rejected, err := httpSender(srv.Client(), srv.URL)(make([]model.Transaction, 10))
+	if err != nil {
+		t.Fatalf("503 with a body is shed load, not an error: %v", err)
+	}
+	if rejected != 4 {
+		t.Errorf("rejected = %d, want 4", rejected)
+	}
+}
+
+func TestHTTPSenderReportsRealFailures(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	if _, err := httpSender(srv.Client(), srv.URL)(make([]model.Transaction, 3)); err == nil {
+		t.Error("a 500 must surface as an error, not as silent success")
 	}
 }
