@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -150,6 +152,8 @@ func (c *Consumer) handleRecords(ctx context.Context, recs []*kgo.Record) {
 // Producer publishes transactions — used by cmd/loadgen in Kafka mode.
 type Producer struct {
 	client *kgo.Client
+	failed atomic.Int64
+	logged sync.Once
 }
 
 func NewProducer(brokers []string) (*Producer, error) {
@@ -175,11 +179,22 @@ func (p *Producer) Send(ctx context.Context, tx model.Transaction) error {
 	// velocity rules depend on that ordering.
 	p.client.Produce(ctx, &kgo.Record{Key: []byte(tx.CardHash), Value: b}, func(_ *kgo.Record, err error) {
 		if err != nil {
-			slog.Error("kafka produce", "err", err)
+			// Produce failures are asynchronous, so a caller counting its own
+			// successful Send calls would over-report. Count them here and let
+			// the caller ask. Logging every one at load drowns the terminal and
+			// slows the very thing being measured, so only the first is logged.
+			p.failed.Add(1)
+			p.logged.Do(func() {
+				slog.Error("kafka produce (further failures counted, not logged)", "err", err)
+			})
 		}
 	})
 	return nil
 }
+
+// Failures reports asynchronous produce errors. A throughput number that
+// ignores them is a lie.
+func (p *Producer) Failures() int64 { return p.failed.Load() }
 
 func (p *Producer) Close() {
 	p.client.Flush(context.Background())
