@@ -11,6 +11,7 @@ import (
 
 	"lambari/internal/cases"
 	"lambari/internal/engine"
+	"lambari/internal/metrics"
 	"lambari/internal/model"
 )
 
@@ -27,7 +28,14 @@ type Server struct {
 	simRate   atomic.Int64
 	simActive atomic.Bool
 	mode      string // "inline" or "kafka"
+
+	// lagSource is nil in inline mode, where there is no consumer to lag.
+	lagSource func() map[int32]int64
 }
+
+// SetLagSource wires consumer lag into the metrics endpoint. Called only in
+// Kafka mode, which keeps this package free of any Kafka import.
+func (s *Server) SetLagSource(fn func() map[int32]int64) { s.lagSource = fn }
 
 func NewServer(eng *engine.Engine, store cases.Store, mode string) *Server {
 	s := &Server{eng: eng, store: store, mux: http.NewServeMux(), mode: mode}
@@ -38,6 +46,8 @@ func NewServer(eng *engine.Engine, store cases.Store, mode string) *Server {
 	s.mux.HandleFunc("POST /api/simulate", s.simulate)
 	s.mux.HandleFunc("GET /api/cases", s.listCases)
 	s.mux.HandleFunc("POST /api/cases/{id}/resolve", s.resolveCase)
+	// Scrape endpoints live at the root by convention, not under /api.
+	s.mux.HandleFunc("GET /metrics", s.metrics)
 	return s
 }
 
@@ -62,6 +72,19 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) stats(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, s.eng.Snapshot())
+}
+
+func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
+	var lag map[int32]int64
+	if s.lagSource != nil {
+		lag = s.lagSource()
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	if err := metrics.Write(w, s.eng.Snapshot(), s.eng.Histogram(), lag); err != nil {
+		// The response is already partly on the wire, so the status is spent —
+		// but a scrape failing silently is how monitoring rots.
+		slog.Error("write metrics", "err", err)
+	}
 }
 
 // ingest accepts a JSON array of transactions — this is the IO path an

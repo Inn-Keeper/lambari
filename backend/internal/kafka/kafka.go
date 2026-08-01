@@ -33,7 +33,14 @@ type Consumer struct {
 	// Called before every offset commit: committing first would mean a crash
 	// silently loses whatever publishes were still buffered.
 	flush func(ctx context.Context) error
+	// lag is fed from every fetch and read by the metrics endpoint.
+	lag lagTracker
 }
+
+// Lag reports how many records behind the head this consumer is, per
+// partition. This is the signal to autoscale on: a saturated consumer can sit
+// at low CPU while lag climbs, so CPU-based scaling would never react.
+func (c *Consumer) Lag() map[int32]int64 { return c.lag.Snapshot() }
 
 func NewConsumer(brokers []string, eng *engine.Engine, dlq *DLQProducer, verdicts *VerdictProducer) (*Consumer, error) {
 	c := &Consumer{eng: eng, dlq: dlq.Send, flush: func(ctx context.Context) error {
@@ -89,6 +96,16 @@ func (c *Consumer) Run(ctx context.Context) {
 			time.Sleep(time.Second)
 			continue
 		}
+
+		// The high watermark rides along on every fetch, so lag costs nothing
+		// beyond reading it.
+		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+			last := int64(-1)
+			if n := len(p.Records); n > 0 {
+				last = p.Records[n-1].Offset
+			}
+			c.lag.Observe(p.Partition, p.HighWatermark, last)
+		})
 
 		recs := make([]*kgo.Record, 0, fetches.NumRecords())
 		fetches.EachRecord(func(rec *kgo.Record) { recs = append(recs, rec) })

@@ -41,6 +41,10 @@ type Engine struct {
 	latMu     sync.Mutex
 	latSample []int64 // microseconds, capped ring
 
+	// latency histogram for the metrics endpoint — see histogram.go for why
+	// this exists next to the reservoir rather than replacing it
+	lat histogram
+
 	// ring buffer of recent verdicts for the live feed
 	ringMu sync.Mutex
 	ring   []model.Verdict
@@ -178,6 +182,8 @@ func (e *Engine) score(tx *model.Transaction) {
 		}
 		e.ruleMu.Unlock()
 	}
+
+	e.lat.observe(lat)
 
 	// sample latency (keep it cheap: only every 8th tx)
 	if pn%8 == 0 {

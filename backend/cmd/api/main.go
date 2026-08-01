@@ -30,6 +30,7 @@ func main() {
 	defer cancel()
 
 	var verdictPub *kafka.VerdictProducer
+	var consumer *kafka.Consumer
 	if brokers != "" {
 		mode = "kafka"
 		seeds := strings.Split(brokers, ",")
@@ -43,7 +44,7 @@ func main() {
 			slog.Error("verdict producer failed", "err", err)
 			os.Exit(1)
 		}
-		consumer, err := kafka.NewConsumer(seeds, eng, dlq, verdictPub)
+		consumer, err = kafka.NewConsumer(seeds, eng, dlq, verdictPub)
 		if err != nil {
 			slog.Error("kafka connect failed", "err", err)
 			os.Exit(1)
@@ -62,9 +63,14 @@ func main() {
 	})
 	eng.Start()
 
+	apiSrv := api.NewServer(eng, store, mode)
+	if consumer != nil {
+		apiSrv.SetLagSource(consumer.Lag)
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           api.NewServer(eng, store, mode).Handler(),
+		Handler:           apiSrv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
