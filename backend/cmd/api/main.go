@@ -31,6 +31,12 @@ func main() {
 
 	var verdictPub *kafka.VerdictProducer
 	var consumer *kafka.Consumer
+	// consumerDone closes when Run has fully unwound — including the group
+	// leave. Nothing below may run before that: stopping the engine first can
+	// close the buffer under an in-flight SubmitBatch, and exiting first skips
+	// LeaveGroup, which strands this member's partitions until the group's
+	// session timeout expires (~45s of no one consuming them).
+	consumerDone := make(chan struct{})
 	if brokers != "" {
 		mode = "kafka"
 		seeds := strings.Split(brokers, ",")
@@ -49,7 +55,10 @@ func main() {
 			slog.Error("kafka connect failed", "err", err)
 			os.Exit(1)
 		}
-		go consumer.Run(ctx)
+		go func() {
+			defer close(consumerDone)
+			consumer.Run(ctx)
+		}()
 		slog.Info("kafka wired", "brokers", brokers, "in", kafka.Topic, "out", kafka.VerdictTopic, "dlq", kafka.DLQTopic)
 	}
 
@@ -87,6 +96,13 @@ func main() {
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
 	_ = srv.Shutdown(shutCtx)
+	if consumer != nil {
+		select {
+		case <-consumerDone:
+		case <-time.After(10 * time.Second):
+			slog.Error("consumer did not stop in time — leaving the group by session timeout")
+		}
+	}
 	eng.Stop()
 }
 

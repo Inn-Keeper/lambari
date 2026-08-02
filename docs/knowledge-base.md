@@ -159,6 +159,7 @@ All numbers from live runs in a containerized environment (Intel Xeon 2.80GHz):
 | Scoring latency p99 | 33–123µs | Same; reported as `≤50µs` / `≤250µs` |
 | Flagged rate on synthetic traffic | ~5.5–5.8% | Generator embeds ~8–10% fraud patterns; some score below thresholds |
 | Queue depth under 6k tx/s | 0 / 16,384 | Engine never saturated at demo rates |
+| Velocity windows lost on a clean rebalance | 12–15 of 24 cards | `make rebalance`: two consumers, 6 partitions, SIGTERM one (four runs) |
 
 Historical note: the first benchmark read ~130k tx/sec; removing a dead map
 write from the hot path (see §9, fix 1) raised it to ~154k.
@@ -200,7 +201,7 @@ Principles applied:
 - **First-pass output always needs a review pass — including (especially)
   AI-generated code.**
 
-The self-review found and fixed four real defects (kept here as a log,
+The self-review found and fixed five real defects (kept here as a log,
 because the *pattern* of each is reusable):
 
 | # | Defect | Class | Impact | Fix |
@@ -209,15 +210,18 @@ because the *pattern* of each is reusable):
 | 2 | `\|\| true` in the SSE hook's history condition | Dead condition (AI residue) | Misleading code, no functional bug | Deleted the condition |
 | 3 | Resolved cases never left the map | Unbounded memory growth | Slow leak on long runs | Capped resolved history; open count became O(1) counter |
 | 4 | `score()` called `processed.Load()` twice after `Add(1)` already returned the value | Redundant atomics on hot path | Minor cost, sloppy | Capture `pn := Add(1)` once |
+| 5 | `cmd/api` started the consumer with `go consumer.Run(ctx)` and never waited for it | Shutdown ordering | SIGTERM could exit before `LeaveGroup`, stranding the member's partitions for the ~45s session timeout; `eng.Stop()` could also close the buffer under an in-flight `SubmitBatch` | Wait on a `consumerDone` channel before stopping the engine (found while building `make rebalance`, which needs a clean leave) |
 
 ## 10. Known tradeoffs (documented, not hidden)
 
-- **Kafka offsets commit after enqueue, not after scoring.** A crash can
-  drop transactions buffered in the engine. Acceptable for scoring
-  (upstream can replay); never acceptable for money movement.
-- **Velocity state is per-instance.** Two API replicas = two independent
-  velocity windows. Horizontal scale requires Redis or partition-affinity
-  (Kafka partitioning by card token already provides the latter).
+- **Velocity state is per-instance, and partition affinity is not a fix.**
+  Producing keyed by card token keeps one card on one partition, which is
+  what makes the windows coherent — but the window still lives in the
+  memory of whoever owns that partition today. `make rebalance` measures
+  the consequence: stopping one of two consumers with SIGTERM (a rolling
+  deploy) left 12–15 of 24 cards mid-attack scoring as first-time traffic,
+  with no error raised anywhere. External state (Redis, Flink) is the only
+  real fix; the open question is what it costs in throughput.
 - **SSE marshals per connection.** Fine for a dashboard; a fleet of
   consumers needs a single-marshal broadcaster.
 - **Case = tx (1:1).** Production groups related transactions (same card,
@@ -246,12 +250,15 @@ make run-api        # engine + API on :8080 (inline mode, no Kafka needed)
 make run-web        # dashboard on :5173
 make sim            # start built-in simulator at 5000 tx/s
 make loadgen        # external HTTP flood: 5000 tx/s for 30s
-make test           # backend tests (7)
+make test           # backend tests
+make test-web       # frontend tests (vitest)
 make bench          # engine throughput benchmark
 
 make kafka-up       # Redpanda :19092 + console UI :8081
 make kafka-run      # API consuming from `transactions` topic
 make kafka-loadgen  # produce 5000 tx/s into the topic
+make e2e            # crash-replay: SIGKILL a consumer, assert no verdict is lost
+make rebalance      # state loss: SIGTERM one of two consumers, count lost windows
 ```
 
 Env vars: `LAMBARI_ADDR` (default `:8080`) ·

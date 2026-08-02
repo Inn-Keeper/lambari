@@ -1,4 +1,4 @@
-.PHONY: setup build run-api run-web sim bench test test-web loadgen kafka-up kafka-run e2e
+.PHONY: setup build run-api run-web sim bench test test-web loadgen kafka-up kafka-run e2e rebalance
 
 setup:            ## install backend + frontend dependencies
 	cd backend && go mod tidy
@@ -40,3 +40,7 @@ kafka-loadgen:    ## produce 5000 tx/s into the transactions topic
 e2e:              ## crash-replay at-least-once test against Redpanda (SIGKILLs a real consumer)
 	docker compose up -d --wait redpanda
 	cd backend && LAMBARI_KAFKA_BROKERS=localhost:19092 go test -run TestCrashReplayAtLeastOnce -v -timeout 5m -count=1 ./internal/kafka/
+
+rebalance:        ## show velocity state dying when a partition moves between consumers
+	docker compose up -d --wait redpanda
+	cd backend && LAMBARI_KAFKA_BROKERS=localhost:19092 go test -run TestRebalanceLosesVelocityState -v -timeout 5m -count=1 ./internal/kafka/

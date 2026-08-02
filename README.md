@@ -91,6 +91,8 @@ make kafka-up        # Redpanda on :19092, console UI on :8081
 make kafka-run       # API consumes from the `transactions` topic
 make kafka-loadgen   # produce 5000 tx/s into the topic
 make e2e             # crash-replay proof: SIGKILL the consumer, assert no loss
+make rebalance       # state-loss proof: SIGTERM one of two consumers, count the
+                     #   velocity windows that vanish with the partitions
 ```
 
 Records are keyed by card token so one card's events stay ordered within a
@@ -121,6 +123,39 @@ The pipeline is **at-least-once with idempotent effects**:
 mid-batch against Redpanda, restarts it, and asserts every verdict arrived at
 least once. A graceful shutdown can't stand in for a crash — the revoke hook
 correctly commits on the way out, so the test kills by signal.
+
+### Velocity state is partition-local — and it dies on rebalance
+
+At-least-once covers the *records*. It does not cover the *state* the records
+built up. Sliding velocity windows live in the memory of whichever process owns
+the partition, and partitions move.
+
+`make rebalance` measures it: two consumers in one group on a 6-partition
+topic, 24 cards hammered until each is scored `card_velocity_extreme`, then one
+consumer is stopped with **SIGTERM** — an ordinary rolling deploy, not a crash.
+A representative run:
+
+```
+velocity state after a clean rebalance: 15 of 24 cards lost their window
+(partition moved, survivor started from empty), 9 kept it (partition never
+moved). Those 15 cards were mid-attack and scored as first-time traffic.
+```
+
+Three things worth saying out loud about that number:
+
+- **No error is raised anywhere.** The transactions are consumed, scored and
+  answered. Detection quietly gets worse for a minute, then heals as the
+  windows refill.
+- **The damage is partial.** Cards on partitions that never moved keep their
+  history, so no aggregate metric shows a cliff — which is what makes it hard
+  to notice in production.
+- **A crash is the same failure, delayed.** SIGTERM leaves the group
+  immediately; SIGKILL strands the partitions until the session timeout
+  (~45s) and *then* does the same thing.
+
+This is the honest argument for external state (Redis, or Flink keyed state
+with checkpoints) rather than a hand-wave: the windows are the thing that
+cannot be rebuilt from an offset.
 
 ## Architecture
 
@@ -242,11 +277,11 @@ model training.
 Known gaps, stated plainly — the delta between this and production is more
 interesting than pretending there isn't one:
 
-- **Velocity state dies on rebalance.** The sliding windows live in process
-  memory, so when partitions move to another consumer the affected keys start
-  from zero: no error, just quietly worse detection. Redis with a pipelined
-  sliding window, or Flink keyed state with checkpoints, is the real fix — and
-  the honest question is what distributing that state costs in throughput.
+- **Velocity state dies on rebalance** — measured, not assumed: `make
+  rebalance` loses roughly half the in-flight windows on a clean SIGTERM (see
+  above). Redis with a pipelined sliding window, or Flink keyed state with
+  checkpoints, is the real fix — and the honest question is what distributing
+  that state costs in throughput, which is the next thing to measure.
 - **The case store is in memory.** Cases and their labels do not survive a
   restart. `schema.sql` is the Postgres shape; the `Store` interface is the
   swap point.
@@ -268,7 +303,8 @@ backend/
   cmd/loadgen/      # traffic flood tool (HTTP or Kafka transport)
   internal/engine/  # worker pool, rules, sharded state, latency histogram
   internal/model/   # transaction/verdict types, synthetic generator
-  internal/kafka/   # franz-go consumer + producers, lag tracking, crash-replay e2e
+  internal/kafka/   # franz-go consumer + producers, lag tracking, crash-replay
+                    #   and rebalance-state-loss experiments
   internal/cases/   # review queue store + tests (schema.sql = Postgres shape)
   internal/metrics/ # Prometheus text exposition (no client library)
   internal/api/     # HTTP handlers, SSE stream, simulator, /metrics
