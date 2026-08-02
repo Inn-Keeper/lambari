@@ -35,6 +35,13 @@ the histogram exports raw buckets that Prometheus can aggregate across pods,
 while the reservoir keeps feeding the dashboard the precise live number a
 human is watching.
 
+> **Revised 2026-08-02:** the reservoir was removed. Keeping two latency
+> mechanisms cost a mutex, a 4,096-element copy and a sort on every
+> `Snapshot()` (once per SSE frame) to make one dashboard number exact.
+> `Histogram.Quantile` now derives p50/p99 from the same buckets, so the
+> dashboard reads `≤250µs` instead of `123µs`. The aggregation argument above
+> still stands — it is why the *histogram* is what survived.
+
 ### 2. `internal/metrics` package
 
 A pure function, HTTP-free and therefore testable as data-in/text-out:

@@ -432,7 +432,7 @@ sequenceDiagram
     alt review or decline
         W->>S: OnFlagged(verdict) -> Open(case)
     end
-    W-->>E: Verdict recorded (atomics, reservoir sample)
+    W-->>E: Verdict recorded (atomics, latency histogram)
     loop every 400ms
         E->>D: stats + recent verdicts + case counts
     end

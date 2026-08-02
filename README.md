@@ -158,8 +158,8 @@ correctly commits on the way out, so the test kills by signal.
   shards keyed by FNV hash, so thousands of concurrent workers don't fight
   over one lock. A background sweeper evicts idle keys to keep memory flat.
 - **Lock-free reads**: counters are atomics; the stats endpoint never stalls
-  the hot path. Latency percentiles come from a sampled reservoir (every 8th
-  transaction).
+  the hot path. Latency lands in a lock-free bucketed histogram, and the
+  dashboard's p50/p99 are read back out of those same buckets.
 - **Scoring is additive**: each rule returns points + a flag; ≥40 ⇒ review,
   ≥70 ⇒ decline. Thresholds and the rule chain live in one place
   (`internal/engine/rules.go`) so tuning is a one-line change.
@@ -207,8 +207,10 @@ Kafka mode only — consumer lag per partition plus a summed total.
 Scoring latency is exported as a **bucketed histogram**, not a pre-computed
 percentile, because a percentile calculated inside one process cannot be
 aggregated with another's: averaging eight pods' p99s is meaningless.
-Prometheus gets raw buckets it can sum across pods; the dashboard keeps the
-sampled reservoir for the exact live number a human is watching.
+Prometheus gets raw buckets it can sum across pods, and the dashboard's p50/p99
+are read back out of the same buckets. That makes the dashboard numbers
+bucket-quantized (a p99 reads `250µs`, not `123µs`) — the price of having one
+latency mechanism in the engine instead of two.
 
 Consumer lag comes from the high watermark that every fetch already carries —
 no admin client, no extra round-trips. It is the signal to autoscale on: a

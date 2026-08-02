@@ -89,8 +89,9 @@ Five frontend runtime dependencies. Every addition needs to pay rent.
   *Honest caveat: 256 was a reasoned guess, never benchmarked against 64
   or 512.*
 - **Lock-free reads.** Counters are atomics; the stats endpoint never
-  stalls the hot path. Latency percentiles come from a sampled reservoir
-  (every 8th transaction, 4,096-slot ring).
+  stalls the hot path. Latency goes into a lock-free bucketed histogram —
+  one atomic add per transaction — and the p50/p99 the dashboard shows are
+  read back out of those buckets, so they are bucket-quantized.
 - **Additive scoring, one tuning surface.** Each rule returns points + a
   flag. Thresholds and the rule chain live in `internal/engine/rules.go`
   only.
@@ -154,8 +155,8 @@ All numbers from live runs in a containerized environment (Intel Xeon 2.80GHz):
 |---|---|---|
 | Engine throughput | **~154,000 tx/sec** | `go test -bench`, full worker pool, drain included in timing |
 | Sustained end-to-end | 5,000–6,000 tx/s | Built-in simulator + SSE-observed rate |
-| Scoring latency p50 | ~2µs | Sampled reservoir under 5k tx/s load |
-| Scoring latency p99 | 33–123µs | Same |
+| Scoring latency p50 | ~2µs | Under 5k tx/s load; now reported as the enclosing bucket (`≤2µs`) |
+| Scoring latency p99 | 33–123µs | Same; reported as `≤50µs` / `≤250µs` |
 | Flagged rate on synthetic traffic | ~5.5–5.8% | Generator embeds ~8–10% fraud patterns; some score below thresholds |
 | Queue depth under 6k tx/s | 0 / 16,384 | Engine never saturated at demo rates |
 

@@ -2,7 +2,6 @@ package engine
 
 import (
 	"runtime"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,12 +40,8 @@ type Engine struct {
 	ruleMu    sync.Mutex
 	ruleFires map[string]int64
 
-	// latency reservoir (sampled) for percentile estimates
-	latMu     sync.Mutex
-	latSample []int64 // microseconds, capped ring
-
-	// latency histogram for the metrics endpoint — see histogram.go for why
-	// this exists next to the reservoir rather than replacing it
+	// scoring latency, in microseconds — feeds both /metrics and the
+	// dashboard's p50/p99 (see histogram.go)
 	lat histogram
 
 	// ring buffer of recent verdicts for the live feed
@@ -67,7 +62,6 @@ type Engine struct {
 const (
 	bufferSize = 16_384
 	ringSize   = 64
-	latCap     = 4096
 )
 
 func New() *Engine {
@@ -197,17 +191,6 @@ func (e *Engine) score(tx *model.Transaction) {
 
 	e.lat.observe(lat)
 
-	// sample latency (keep it cheap: only every 8th tx)
-	if pn%8 == 0 {
-		e.latMu.Lock()
-		if len(e.latSample) < latCap {
-			e.latSample = append(e.latSample, lat)
-		} else {
-			e.latSample[int(pn/8)%latCap] = lat
-		}
-		e.latMu.Unlock()
-	}
-
 	if decision != model.Approve && e.onFlagged != nil {
 		e.onFlagged(v)
 	}
@@ -245,8 +228,8 @@ type Stats struct {
 	Declined    int64            `json:"declined"`
 	Rejected    int64            `json:"rejected"` // shed: buffer was full
 	RatePerSec  int64            `json:"rate_per_sec"`
-	P50US       int64            `json:"p50_us"`
-	P99US       int64            `json:"p99_us"`
+	P50US       int64            `json:"p50_us"` // bucket upper bound, not exact
+	P99US       int64            `json:"p99_us"` // bucket upper bound, not exact
 	QueueDepth  int              `json:"queue_depth"`
 	QueueCap    int              `json:"queue_cap"`
 	UptimeSec   int64            `json:"uptime_sec"`
@@ -258,16 +241,7 @@ func (e *Engine) Snapshot() Stats {
 	p := e.processed.Load()
 	rev, dec := e.reviewed.Load(), e.declined.Load()
 
-	e.latMu.Lock()
-	lats := make([]int64, len(e.latSample))
-	copy(lats, e.latSample)
-	e.latMu.Unlock()
-	sort.Slice(lats, func(i, j int) bool { return lats[i] < lats[j] })
-	var p50, p99 int64
-	if n := len(lats); n > 0 {
-		p50 = lats[n/2]
-		p99 = lats[min(n-1, n*99/100)]
-	}
+	lat := e.lat.snapshot()
 
 	e.ruleMu.Lock()
 	fires := make(map[string]int64, len(e.ruleFires))
@@ -284,7 +258,8 @@ func (e *Engine) Snapshot() Stats {
 	return Stats{
 		Processed: p, Approved: e.approved.Load(), Reviewed: rev, Declined: dec,
 		Rejected:   e.rejected.Load(),
-		RatePerSec: e.lastRate.Load(), P50US: p50, P99US: p99,
+		RatePerSec: e.lastRate.Load(),
+		P50US:      lat.Quantile(0.50), P99US: lat.Quantile(0.99),
 		QueueDepth: len(e.in), QueueCap: cap(e.in),
 		UptimeSec: int64(time.Since(e.startedAt).Seconds()),
 		RuleFires: fires, FlaggedRate: flagged,
@@ -303,11 +278,4 @@ func (e *Engine) Recent() []model.Verdict {
 		}
 	}
 	return out
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

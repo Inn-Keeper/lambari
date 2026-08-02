@@ -48,6 +48,35 @@ func TestHistogramBucketsAreCumulative(t *testing.T) {
 	}
 }
 
+// The dashboard's p50/p99 are read out of these buckets, so a quantile has to
+// land in the bucket that actually holds it — off by one bucket is a 2-5×
+// error at this scale.
+func TestQuantileLandsInTheRightBucket(t *testing.T) {
+	var h histogram
+	// 100 observations: 90 at 3µs (bucket le=5), 9 at 60µs (le=100),
+	// 1 at 9000µs (+Inf). p50 sits in the first, p99 in the last.
+	for i := 0; i < 90; i++ {
+		h.observe(3)
+	}
+	for i := 0; i < 9; i++ {
+		h.observe(60)
+	}
+	h.observe(9000)
+
+	got := h.snapshot()
+	if p50 := got.Quantile(0.50); p50 != 5 {
+		t.Errorf("p50 = %dµs, want 5 (the le=5 bucket holds 90%% of the mass)", p50)
+	}
+	if p99 := got.Quantile(0.99); p99 != 5000 {
+		t.Errorf("p99 = %dµs, want 5000 — the 99th observation overflowed, and the largest finite bound is the floor we report", p99)
+	}
+
+	// An empty histogram reports 0 rather than reading past the end.
+	if p := (Histogram{Bounds: latencyBuckets[:]}).Quantile(0.99); p != 0 {
+		t.Errorf("empty histogram p99 = %d, want 0", p)
+	}
+}
+
 // Scoring must feed the histogram, or the exported metric is a lie.
 func TestScoringRecordsLatency(t *testing.T) {
 	e := New()

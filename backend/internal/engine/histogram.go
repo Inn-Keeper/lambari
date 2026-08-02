@@ -10,12 +10,11 @@ var latencyBuckets = [...]int64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 
 
 // histogram counts scoring latencies per bucket, lock-free.
 //
-// This exists alongside the sampled reservoir behind Stats.P50US/P99US, and
-// the duplication is deliberate: a percentile computed inside one process
-// cannot be aggregated with another process's — averaging the p99s of eight
-// pods is meaningless. The reservoir gives a human watching one dashboard an
-// exact live number; the histogram gives Prometheus raw buckets it can sum
-// across every pod and take a real quantile from.
+// It is the only latency measurement in the engine: Prometheus needs raw
+// buckets (a per-pod percentile cannot be aggregated — averaging the p99s of
+// eight pods is meaningless), and the dashboard's p50/p99 are read back out of
+// those same buckets via Quantile. Bucket-quantized numbers on the dashboard
+// are a fair price for having one mechanism instead of two.
 type histogram struct {
 	// counts are per-bucket (not cumulative) so the hot path is one Add;
 	// snapshot does the cumulating. The final entry is the +Inf overflow.
@@ -57,6 +56,27 @@ func (h *histogram) snapshot() Histogram {
 	}
 	out.Count = running
 	return out
+}
+
+// Quantile returns the upper bound of the bucket the q-th quantile falls in —
+// the same "no worse than this" answer Prometheus' histogram_quantile gives,
+// without interpolating. A quantile landing in the +Inf bucket reports the
+// largest finite bound, which is then a floor: read it as "≥ 5000µs".
+func (h Histogram) Quantile(q float64) int64 {
+	if h.Count == 0 {
+		return 0
+	}
+	last := h.Bounds[len(h.Bounds)-1]
+	rank := int64(float64(h.Count) * q) // 0-indexed position of the quantile
+	for i, c := range h.Counts {
+		if c > rank {
+			if i == len(h.Bounds) {
+				return last
+			}
+			return h.Bounds[i]
+		}
+	}
+	return last
 }
 
 // Histogram returns the scoring-latency distribution for the metrics endpoint.
