@@ -42,7 +42,10 @@ error if the server refuses.
 
 - Go 1.22+
 - Node 22 + pnpm (`corepack enable` picks up the pinned version)
-- Docker (only for Kafka mode)
+- Docker, for Kafka mode only. `make kafka-up` additionally needs the **Compose
+  v2 plugin**; if `docker compose version` fails (colima, for one, ships
+  without it), start the broker directly instead — see below. The experiments
+  themselves never touch Compose.
 
 ## Quickstart (no Kafka needed)
 
@@ -97,6 +100,16 @@ make rebalance       # state-loss proof: SIGTERM one of two consumers, count the
                      #   velocity windows that vanish with the partitions
 ```
 
+`make kafka-up` is Compose; the rest only need a broker on `localhost:19092`
+and check for one before doing anything. Without the Compose plugin, the same
+broker in one command (no console UI):
+
+```bash
+docker run -d --name lambari-redpanda -p 19092:19092 redpandadata/redpanda:v24.2.7 \
+  redpanda start --smp 1 --overprovisioned --mode dev-container \
+  --kafka-addr external://0.0.0.0:19092 --advertise-kafka-addr external://localhost:19092
+```
+
 Records are keyed by card token so one card's events stay ordered within a
 partition — the velocity rules depend on that. Backpressure is natural:
 if the engine saturates, polling slows and consumer lag becomes visible
@@ -117,9 +130,12 @@ The pipeline is **at-least-once with idempotent effects**:
   rather than a log line, and don't block the rest of the batch.
 - `OnPartitionsRevoked` flushes and commits before a rebalance, bounding
   redelivery to one in-flight batch.
-- Duplicates are harmless by construction: cases dedupe on transaction id and
-  verdicts are keyed by it. Replay after a crash is also how the in-memory
-  velocity windows rebuild, so a dedup cache would do more harm than good.
+- Duplicates are harmless *for the effects that leave the process*: cases
+  dedupe on transaction id and verdicts are keyed by it. They are not free
+  inside it — a replayed record advances velocity windows and counters again.
+  That is accepted rather than fixed with a dedupe cache, because after a crash
+  the same replay is what rebuilds the empty windows, and redelivery is bounded
+  to one in-flight batch.
 
 `make e2e` proves it: it streams transactions, SIGKILLs the real consumer
 mid-batch against Redpanda, restarts it, and asserts every verdict arrived at
@@ -287,9 +303,17 @@ transactions is what makes `accepted: N` actionable — it means "the first N,
 resend from there".
 
 503 rather than 429 because the constraint is this server's capacity, not this
-caller's rate. Retrying is safe by construction: cases dedupe on transaction id
-and verdicts are keyed by it, so a partially-landed batch cannot double-count
-on the way back. Shed load is counted in `lambari_submissions_rejected_total`.
+caller's rate. Shed load is counted in `lambari_submissions_rejected_total`.
+
+**The retry contract is "resend from N", and it is not optional.** Re-posting
+the whole batch re-scores the prefix the server already accepted: velocity
+windows advance twice for those cards, counters and rule fires double-count,
+and a second verdict is published. Only case creation is genuinely idempotent
+(it dedupes on transaction id). Scoring is not, and there is no dedupe cache —
+deliberately, because the same replay is what rebuilds in-memory windows after
+a crash on the Kafka path. That is the trade: `accepted: N` is precise so the
+caller can be precise, and a caller that ignores it corrupts velocity state
+rather than merely wasting work.
 
 The Kafka path deliberately answers the same question differently — it
 *blocks* (`SubmitBatch`) rather than shedding. One consumer loop slowing down

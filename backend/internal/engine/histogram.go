@@ -6,7 +6,14 @@ import "sync/atomic"
 // histogram. Spread wide on purpose: scoring is single-digit microseconds when
 // the windows are warm and hundreds when a shard is contended, and the
 // interesting question is which of those you are in.
-var latencyBuckets = [...]int64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000}
+//
+// The top of the range is 1s rather than 5ms because a quantile that overflows
+// is reported as the largest finite bound (see Quantile) — a floor rendered as
+// if it were a reading. The ceiling ramp produced GC assist waves of 1.4s, so
+// millisecond-scale scoring latency is a thing that actually happens here, and
+// pinning the dashboard at "5,000µs" through it would be a lie with three
+// orders of magnitude in it.
+var latencyBuckets = [...]int64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10_000, 100_000, 1_000_000}
 
 // histogram counts scoring latencies per bucket, lock-free.
 //
@@ -61,7 +68,9 @@ func (h *histogram) snapshot() Histogram {
 // Quantile returns the upper bound of the bucket the q-th quantile falls in —
 // the same "no worse than this" answer Prometheus' histogram_quantile gives,
 // without interpolating. A quantile landing in the +Inf bucket reports the
-// largest finite bound, which is then a floor: read it as "≥ 5000µs".
+// largest finite bound, which is then a floor rather than a reading: a p99 of
+// 1,000,000µs means "at least a second", and at that point the number the
+// dashboard shows is the least of the problems.
 func (h Histogram) Quantile(q float64) int64 {
 	if h.Count == 0 {
 		return 0

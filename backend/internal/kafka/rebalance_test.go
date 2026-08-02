@@ -59,8 +59,8 @@ func TestRebalanceLosesVelocityState(t *testing.T) {
 	runID := fmt.Sprintf("rb_%d", time.Now().UnixNano())
 	txID := func(round, card int) string { return fmt.Sprintf("%s-r%02d-c%02d", runID, round, card) }
 
-	// Watch verdicts from the end: this run's records are all produced after
-	// the watcher exists, and starting at the end keeps old runs out.
+	// Watch verdicts from the end, which keeps previous runs (and the millions
+	// of records a load test leaves behind) out of the way.
 	watcher, err := kgo.NewClient(
 		kgo.SeedBrokers(seeds...),
 		kgo.ConsumeTopics(VerdictTopic),
@@ -70,6 +70,15 @@ func TestRebalanceLosesVelocityState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer watcher.Close()
+
+	// "AtEnd" is resolved when the consumer actually starts, not when NewClient
+	// returns — franz-go connects lazily. Poll once, with nothing to find, so
+	// the end offset is anchored before the first record exists; otherwise a
+	// verdict produced during that window is skipped forever and the test hangs
+	// waiting for it.
+	primeCtx, cancelPrime := context.WithTimeout(context.Background(), 5*time.Second)
+	watcher.PollFetches(primeCtx)
+	cancelPrime()
 
 	verdicts := map[string]model.Verdict{} // TxID -> verdict (last one wins; duplicates are identical)
 	collect := func(want int, deadline time.Duration) {
@@ -212,6 +221,16 @@ func TestRebalanceLosesVelocityState(t *testing.T) {
 	if lost == 0 {
 		t.Fatalf("all %d cards kept their velocity history across the rebalance — expected the "+
 			"partitions that moved to score cold on the survivor", hotCards)
+	}
+	// Both halves matter. If nothing was kept, the survivor did not already own
+	// partitions of its own — it joined late, or the group never split — and
+	// what the run demonstrated is a total state reset, not the *partial*,
+	// metric-invisible loss this test and the README claim. With 24 keys over
+	// 6 partitions split between two members, "kept nothing" is otherwise a
+	// one-in-a-million event, so failing here is a real signal, not flake.
+	if kept == 0 {
+		t.Fatalf("no card kept its window: the group was not split across both members, so this " +
+			"run shows a full state reset rather than partial loss")
 	}
 	t.Logf("velocity state after a clean rebalance: %d of %d cards lost their window "+
 		"(partition moved, survivor started from empty), %d kept it (partition never moved). "+

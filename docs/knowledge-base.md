@@ -1,7 +1,7 @@
 # Lambari — Product Knowledge Base
 
 *Real-time anti-fraud scoring pipeline. Full-stack proof of concept.*
-*Last updated: 2026-07-23 · Status: PoC, verified working end-to-end*
+*Last updated: 2026-08-02 · Status: PoC, verified working end-to-end*
 
 ---
 
@@ -135,13 +135,14 @@ partial index for training-data export.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/transactions` | Batch JSON ingest (the HTTP IO path). Returns accepted/rejected counts; rejects = engine saturated (backpressure made visible). |
+| `POST /api/transactions` | Batch JSON ingest (the HTTP IO path). Accepts a **prefix** and answers `503 + Retry-After` with `{accepted, rejected}` when saturated. Retry contract: resend from `accepted`, not the whole batch — re-posting the prefix re-scores it and double-advances velocity windows. |
 | `POST /api/simulate` | `{"rate": 5000}` starts built-in generator, `{"rate": 0}` stops. Max 100,000. |
 | `GET /api/stats` | Engine snapshot: counters, rate, p50/p99, queue depth, rule fires. |
 | `GET /api/stream` | SSE every 400ms: stats + recent verdicts + sim state + case counts. |
 | `GET /api/cases` | Review queue, worst first. `?status=resolved` for labeled history. |
 | `POST /api/cases/{id}/resolve` | Body `{"resolution":"confirmed_fraud"\|"false_positive"}`. 404 on double-resolve. |
 | `GET /api/health` | Liveness + mode (`inline` / `kafka`). |
+| `GET /metrics` | Prometheus text exposition, hand-written. Root-level by scrape convention, not under `/api`. Consumer-lag series appear in Kafka mode only. |
 
 **Kafka topics:** `transactions` in (keyed by card token → per-card ordering
 within a partition, which velocity rules depend on) · `verdicts` out (keyed

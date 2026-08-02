@@ -1,4 +1,4 @@
-.PHONY: setup build run-api run-web sim bench test test-web loadgen kafka-up kafka-run e2e rebalance
+.PHONY: setup build run-api run-web sim bench test test-web loadgen kafka-up kafka-run broker-check e2e rebalance
 
 setup:            ## install backend + frontend dependencies
 	cd backend && go mod tidy
@@ -37,10 +37,18 @@ kafka-run:        ## run the API consuming from Kafka
 kafka-loadgen:    ## produce 5000 tx/s into the transactions topic
 	cd backend && go run ./cmd/loadgen -rate 5000 -duration 30s -kafka localhost:19092
 
-e2e:              ## crash-replay at-least-once test against Redpanda (SIGKILLs a real consumer)
-	docker compose up -d --wait redpanda
+# Starting the broker and running an experiment are separate steps on purpose:
+# `make kafka-up` needs the Compose plugin, which not every Docker install has
+# (colima ships without it — see the README for the one-line `docker run`).
+# The experiments only need a reachable broker, however it got there.
+broker-check:
+	@nc -z localhost 19092 || { \
+	  echo "no broker on localhost:19092 — run 'make kafka-up', or start Redpanda"; \
+	  echo "directly if your Docker has no compose plugin (see README, Kafka mode)."; \
+	  exit 1; }
+
+e2e: broker-check   ## crash-replay at-least-once test against Redpanda (SIGKILLs a real consumer)
 	cd backend && LAMBARI_KAFKA_BROKERS=localhost:19092 go test -run TestCrashReplayAtLeastOnce -v -timeout 5m -count=1 ./internal/kafka/
 
-rebalance:        ## show velocity state dying when a partition moves between consumers
-	docker compose up -d --wait redpanda
+rebalance: broker-check ## show velocity state dying when a partition moves between consumers
 	cd backend && LAMBARI_KAFKA_BROKERS=localhost:19092 go test -run TestRebalanceLosesVelocityState -v -timeout 5m -count=1 ./internal/kafka/
