@@ -149,11 +149,19 @@ by tx id).
 
 ## 7. Verified performance (measured, not estimated)
 
-All numbers from live runs in a containerized environment (Intel Xeon 2.80GHz):
+Two machines appear below; the label says which. The older rows are from a
+containerized environment (Intel Xeon 2.80GHz), the ceiling ramp from a Mac
+mini M1 (8 cores, 16 GB) where **the load generator shares the cores with the
+server**, so the server-only ceiling is higher than measured.
 
 | Metric | Value | How measured |
 |---|---|---|
-| Engine throughput | **~154,000 tx/sec** | `go test -bench`, full worker pool, drain included in timing |
+| Engine throughput (M1) | **~712,000 tx/sec** | `go test -bench`, no IO — the upper bound |
+| HTTP ingest ceiling (M1) | **~447,000 tx/sec** at 6 senders | Fresh engine per run, 15s, batch 500; 7.7% shed at the peak |
+| Past the peak (M1) | 273,000 tx/sec at 16 senders, 52.5% shed | Congestion collapse — more offered load, less work done |
+| Kafka produce, 6 partitions (M1) | ~430,000–560,000 tx/sec | `loadgen -kafka -rate 0`; was ~20k/s on the old single-partition topic |
+| Kafka consume + score, one consumer (M1) | ~150,000–180,000 tx/sec | Peak lag >2M — the KEDA signal doing its job |
+| Engine throughput (Xeon) | ~154,000 tx/sec | `go test -bench`, full worker pool, drain included in timing |
 | Sustained end-to-end | 5,000–6,000 tx/s | Built-in simulator + SSE-observed rate |
 | Scoring latency p50 | ~2µs | Under 5k tx/s load; now reported as the enclosing bucket (`≤2µs`) |
 | Scoring latency p99 | 33–123µs | Same; reported as `≤50µs` / `≤250µs` |
@@ -163,6 +171,20 @@ All numbers from live runs in a containerized environment (Intel Xeon 2.80GHz):
 
 Historical note: the first benchmark read ~130k tx/sec; removing a dead map
 write from the hot path (see §9, fix 1) raised it to ~154k.
+
+**What limits the ceiling is memory, not CPU.** At ~400k tx/s the live heap
+reached 2.7 GB in 18 seconds (`gctrace`), GC climbed to 9% of CPU with single
+assist waves of 1,396 ms, and throughput stopped being a number: a 60s run
+averaged 284k tx/s while swinging between 67k and 545k second to second. The
+API process sat at ~430% CPU of 800% available — not starved, stalling. Cause:
+every transaction touches a card key and an IP key, and `StartSweeper` evicts
+only entries older than **10 minutes** while the rules look back 60s (card) and
+5 min (IP). Nothing reads an entry older than its own window, yet everything is
+retained. Caveat: the synthetic generator draws a random card token and IP per
+transaction, so nearly every transaction mints two *new* keys — the worst case.
+Real traffic repeats cards and steady-state memory tracks distinct keys within
+the retention window, not throughput. The shape of the bound is real regardless:
+retention is set by the sweep cutoff, not by the windows it serves.
 
 ## 8. Frontend design system
 
@@ -224,6 +246,10 @@ because the *pattern* of each is reusable):
   real fix; the open question is what it costs in throughput.
 - **SSE marshals per connection.** Fine for a dashboard; a fleet of
   consumers needs a single-marshal broadcaster.
+- **Velocity state is retained far longer than it is read.** The sweeper's
+  cutoff is 10 minutes; the longest rule window is 5. That is what turns
+  sustained load into a memory ceiling (§7), and it is the cheapest thing
+  on this list to change — the expensive part is bounding the state at all.
 - **Case = tx (1:1).** Production groups related transactions (same card,
   same ring) into one case.
 - **No auth.** Stated PoC scope cut.

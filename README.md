@@ -82,7 +82,9 @@ go run ./cmd/loadgen -rate 0 -workers 8 -batch 500 -duration 30s
 
 Every run reports the rate it *achieved*, plus anything the server shed —
 a paced generator can never report more than you asked it for, and a 200
-response that quietly dropped half the batch is not throughput.
+response that quietly dropped half the batch is not throughput. Restart the
+API between configurations: state accumulated by one run handicaps the next.
+[Where that ends up](#throughput-ceiling-measured) is measured below.
 
 ## Kafka mode
 
@@ -156,6 +158,71 @@ Three things worth saying out loud about that number:
 This is the honest argument for external state (Redis, or Flink keyed state
 with checkpoints) rather than a hand-wave: the windows are the thing that
 cannot be rebuilt from an offset.
+
+## Throughput ceiling (measured)
+
+Mac mini M1, 8 cores, 16 GB — **client and server share those cores**, so the
+server-only ceiling is higher than anything below. Every run reports what the
+server *kept*; shed load is counted separately and never folded into the rate.
+
+Stage by stage, each HTTP run against a freshly started engine (15s, batch 500):
+
+| Stage | Result |
+|---|---|
+| Engine alone, no IO (`make bench`) | **711,895 tx/s** |
+| HTTP ingest, 1 worker | 186,536 tx/s · 0% shed |
+| HTTP ingest, 2 workers | 308,510 tx/s · 0% shed |
+| HTTP ingest, 4 workers | 407,282 tx/s · 0.4% shed |
+| HTTP ingest, 6 workers | **447,118 tx/s** · 7.7% shed ← peak |
+| HTTP ingest, 8 workers | 363,442 tx/s · 26.9% shed |
+| HTTP ingest, 16 workers | 273,148 tx/s · 52.5% shed |
+| Kafka produce, 6 partitions | **~430–560k tx/s** |
+| Kafka consume + score (one consumer) | **~150–180k tx/s**, lag peaking >2M |
+
+Three things that curve says:
+
+- **Past the peak, more load buys less work.** At 16 workers the server accepts
+  *less* than at 4 while shedding half of what it is offered — congestion
+  collapse, which is why ingest sheds a prefix and answers 503 instead of
+  queueing.
+- **Producing is ~3× faster than consuming.** The consumer pays JSON decode,
+  scoring, verdict publish and offset commits per record. Under a flood, lag
+  climbs past 2M — which is exactly the KEDA signal `/metrics` exports, doing
+  the job it was built for.
+- **Partition count was the old ceiling, not the broker.** On the
+  single-partition topic this repo used to create, producing stalled around
+  20k/s with `context deadline exceeded`; at 6 partitions it is 20× that.
+  (Across sessions, so not a controlled A/B — but the partition count is the
+  variable that changed.)
+
+### What actually limits it: state memory, not scoring CPU
+
+Scoring is not the wall — the engine alone does 712k tx/s. The wall is the
+velocity state. Each transaction touches a card key and an IP key, and the
+sweeper only evicts entries older than **10 minutes**, while the rules it
+serves look back 60s (card) and 5 min (IP). Nothing reads an entry older than
+its own window, but everything is kept anyway:
+
+- Live heap reached **2.7 GB after 18 seconds** at ~400k tx/s (`gctrace`),
+  RSS 4.2 GB over a 60s run.
+- GC went from negligible to **9% of CPU**, with single assist waves of
+  1,396 ms.
+- Throughput stopped being a number and became a range: a sustained 60s run
+  averaged 284k tx/s while swinging between 67k and 545k second to second.
+- At the peak, the API process used ~430% CPU of 800% available. It was not
+  CPU-starved; it was stalling.
+
+Caveat worth stating: the synthetic generator draws a **random card token and
+IP per transaction**, so nearly every transaction mints two new keys — the
+worst case. Real traffic repeats cards, and steady-state memory tracks
+*distinct keys inside the retention window*, not throughput. What is not an
+artifact is the shape of the bound: retention is set by the sweeper's cutoff
+rather than by the rule windows, and the process cannot sustain its own peak
+rate for even one sweep interval.
+
+Both experiments in this README end at the same place. The in-memory sliding
+window is what breaks correctness when a partition moves, and what breaks
+capacity when traffic is sustained.
 
 ## Architecture
 
@@ -282,6 +349,12 @@ interesting than pretending there isn't one:
   above). Redis with a pipelined sliding window, or Flink keyed state with
   checkpoints, is the real fix — and the honest question is what distributing
   that state costs in throughput, which is the next thing to measure.
+- **That same state is the throughput ceiling** — also measured: sustained
+  load grows the live heap into the gigabytes and GC takes over long before
+  scoring runs out of CPU. The sweeper retains entries for 10 minutes to serve
+  windows of 60s and 5 min, which is a one-line tuning fix that does not change
+  the order of magnitude. Bounding the state is the actual fix, and it is the
+  same fix as the bullet above.
 - **The case store is in memory.** Cases and their labels do not survive a
   restart. `schema.sql` is the Postgres shape; the `Store` interface is the
   swap point.
