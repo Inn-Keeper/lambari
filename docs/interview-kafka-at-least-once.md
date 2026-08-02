@@ -1,8 +1,18 @@
 # Interview talk-track: Kafka at-least-once in Lambari
 
-The one-liner: **"My consumer is at-least-once with idempotent effects — and I
-have a test that SIGKILLs the real binary mid-stream against a real broker to
-prove nothing is ever lost."** Commit `52520f4`, test: `make e2e`.
+The one-liner: **"My consumer is at-least-once. Duplicates are absorbed where I
+own the effect — case creation dedupes on transaction id — and keyed where I
+don't, so a downstream consumer can dedupe for itself. I have a test that
+SIGKILLs the real binary mid-stream against a real broker to prove nothing is
+ever lost."** Commit `52520f4`, test: `make e2e`.
+
+Say it that way rather than "at-least-once with idempotent effects". The
+shorter phrasing sounds better and is wrong: keying a topic by transaction id
+makes downstream deduplication *possible*, it does not perform it, and this
+repo configures neither log compaction nor a downstream dedupe. Claiming
+idempotency you don't control is precisely the kind of thing a good interviewer
+pulls on — and the accurate answer is the more interesting one, because it
+names the boundary of the system you own.
 
 ## The design, as a story
 
@@ -51,12 +61,17 @@ The counterintuitive bit that makes the design elegant:
   counters live in memory. After a crash-restart they're empty; replaying the
   uncommitted tail *rebuilds* them. A TxID dedup cache would actively block
   that recovery — the one time redelivery actually happens at scale.
-- **The duplicate-visible effects are already idempotent.** Case creation
-  dedupes on `TxID` (pinned by a unit test: same verdict twice ⇒ one case).
-  Verdicts are published keyed by `TxID`, so downstream can dedupe — or the
-  topic can be log-compacted.
-- So duplicates cost nothing, and preventing them would cost correctness
-  (blocked state rebuild) plus memory plus code.
+- **One effect is genuinely idempotent; the rest absorb the duplicate.** Case
+  creation dedupes on `TxID` (pinned by a unit test: same verdict twice ⇒ one
+  case). Counters and velocity windows advance twice — accepted, because that
+  second pass is the state rebuild above. Verdicts are published keyed by
+  `TxID`, which *enables* downstream dedupe or log compaction but performs
+  neither: a consumer reading the live stream sees the record twice, and needs
+  its own dedupe on the key. Say this before you are asked; it is the part of
+  the claim that does not survive scrutiny otherwise.
+- So duplicates cost little inside the process, and preventing them would cost
+  correctness (blocked state rebuild) plus memory plus code. What they cost
+  outside it is a contract you hand to whoever consumes the topic.
 
 ### 4. Backpressure for free
 
@@ -108,9 +123,9 @@ never run against a clean cluster before. E2e tests earn their keep.
   effects dedupe on `TxID` regardless of which member re-scores.
 - *"Why not Kafka transactions for exactly-once?"* Exactly-once processing
   needs the state store inside the transaction too; my state is in-memory by
-  design (latency), replay rebuilds it, and the visible effects are
-  idempotent. Transactions would add broker round-trips per batch for zero
-  behavioral difference.
+  design (latency) and replay rebuilds it. Transactions would add broker
+  round-trips per batch and still leave a downstream consumer needing to dedupe
+  on the key, because exactly-once ends at my output topic.
 - *"How does this scale out?"* Partitioned by `CardHash`, so one card's
   events stay ordered within a partition and each member's window state is
   self-contained for the cards it owns. Add partitions + members; rebalance

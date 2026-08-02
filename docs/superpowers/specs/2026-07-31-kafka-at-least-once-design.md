@@ -1,7 +1,25 @@
 # Kafka at-least-once delivery — design
 
 Date: 2026-07-31
-Status: approved
+Status: approved · **revised 2026-08-02, see below**
+
+> **Revisions (2026-08-02).** Three things in this spec have since been
+> corrected or overtaken:
+>
+> 1. **"Idempotent effects" was too strong.** Case creation dedupes on `TxID`
+>    and is genuinely idempotent. Verdicts are only *keyed* by it, which lets a
+>    downstream keyed store or a compacted topic collapse duplicates — neither
+>    of which this repo configures, so a consumer reading the live stream sees
+>    the record twice. Counters and velocity windows also advance twice on
+>    replay. The delivery guarantee is at-least-once; the idempotency claim
+>    holds for exactly one effect.
+> 2. **`make e2e` no longer starts the broker.** That is `make kafka-up`, which
+>    needs the Compose plugin not every Docker install has. The experiments
+>    check for a reachable broker instead.
+> 3. **The out-of-scope list has moved on.** Metrics shipped (`/metrics`, with
+>    consumer lag), and `make rebalance` now measures what at-least-once does
+>    not cover: the in-memory velocity state, which dies when a partition moves
+>    to another consumer.
 
 ## Goal
 
@@ -40,6 +58,8 @@ No dedup cache, no processed-set. The argument:
    `cases.MemStore.Open` returns early when the `TxID` already has an open
    case, and verdicts are published to the `verdicts` topic keyed by `TxID`,
    so downstream consumers can dedupe (or the topic can be log-compacted).
+   *(Revision 1: only the case store is idempotent. Keying enables downstream
+   dedupe; it does not perform it, and none is configured.)*
 3. **Rebalance redelivery is bounded** by the commit-on-revoke hook, so the
    duplicate window in steady operation is at most one batch.
 
@@ -91,15 +111,7 @@ End-to-end (new): `backend/internal/kafka/e2e_test.go`, skipped unless
    poll-score-commit cycle a few milliseconds wide, and are legal — that
    *is* the semantics.
 
-`make e2e` brings up Redpanda and runs the test.
-
-> **Revised 2026-08-02:** `make e2e` no longer starts the broker. Bringing it
-> up is `make kafka-up`, which needs the Compose plugin that not every Docker
-> install has; the experiment only needs a reachable broker and checks for one.
-> The out-of-scope list below has also moved on: metrics shipped (`/metrics`,
-> including consumer lag), and a second experiment, `make rebalance`, now
-> measures what at-least-once does *not* cover — the in-memory velocity state,
-> which dies when a partition moves to another consumer.
+`make e2e` brings up Redpanda and runs the test. *(No longer true — revision 2.)*
 
 ## Out of scope
 

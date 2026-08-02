@@ -35,12 +35,25 @@ the histogram exports raw buckets that Prometheus can aggregate across pods,
 while the reservoir keeps feeding the dashboard the precise live number a
 human is watching.
 
-> **Revised 2026-08-02:** the reservoir was removed. Keeping two latency
+> **Revised 2026-08-02.** The reservoir was removed: keeping two latency
 > mechanisms cost a mutex, a 4,096-element copy and a sort on every
 > `Snapshot()` (once per SSE frame) to make one dashboard number exact.
-> `Histogram.Quantile` now derives p50/p99 from the same buckets, so the
-> dashboard reads `≤250µs` instead of `123µs`. The aggregation argument above
-> still stands — it is why the *histogram* is what survived.
+> `Histogram.Quantile` now derives p50/p99 from the same buckets. The
+> aggregation argument above still stands — it is why the *histogram* is what
+> survived. Three details of the contract above have changed since:
+>
+> - **The bucket range ends at 1s, not 5ms**: `…, 2500, 5000, 10000, 100000,
+>   1000000, +Inf`. The ceiling ramp produced GC assist waves of 1.4s, so
+>   millisecond-scale scoring latency happens here and pinning at 5ms would
+>   have been a three-orders-of-magnitude lie.
+> - **`Quantile` returns `engine.Overflow` (-1)** above the largest bucket
+>   rather than the top bound, because a bound rendered verbatim reads as a
+>   measurement. Every other return is a bucket *upper bound*, so the dashboard
+>   renders `≤250µs` / `off scale` / `—` rather than a bare number.
+> - **Rank semantics follow Prometheus**: the φ-quantile is the first bucket
+>   whose cumulative count *reaches* φ·N. Requiring it to exceed φ·N walks one
+>   bucket too far whenever the rank lands on a bucket edge, which reported the
+>   maximum as the p99 for round observation counts.
 
 ### 2. `internal/metrics` package
 

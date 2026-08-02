@@ -78,13 +78,20 @@ const Overflow int64 = -1
 // return of 100000 means "somewhere in (10ms, 100ms]". Callers that display it
 // have to say so. Returns Overflow above the largest bucket, and 0 when nothing
 // has been observed yet.
+//
+// The φ-quantile sits at rank φ·N, and the bucket holding it is the first whose
+// cumulative count *reaches* that rank — matching Prometheus. Requiring the
+// count to exceed it instead walks one bucket too far whenever the rank lands
+// exactly on a bucket edge, which with round numbers of observations is most of
+// the time: 99 fast requests and one slow one would report the slow one as the
+// p99, when it is the maximum.
 func (h Histogram) Quantile(q float64) int64 {
 	if h.Count == 0 {
 		return 0
 	}
-	rank := int64(float64(h.Count) * q) // 0-indexed position of the quantile
+	rank := float64(h.Count) * q
 	for i, c := range h.Counts {
-		if c > rank {
+		if float64(c) >= rank {
 			if i == len(h.Bounds) {
 				return Overflow
 			}

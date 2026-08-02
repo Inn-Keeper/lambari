@@ -56,24 +56,23 @@ func TestHistogramBucketsAreCumulative(t *testing.T) {
 // error at this scale.
 func TestQuantileLandsInTheRightBucket(t *testing.T) {
 	var h histogram
-	// 100 observations: 90 at 3µs (bucket le=5), 9 at 60µs (le=100), and one
-	// at 9ms — the degradation case, which must land in a real bucket rather
-	// than overflow. p50 sits in the first, p99 in the 9ms observation's.
-	for i := 0; i < 90; i++ {
+	// 100 observations: 98 at 3µs (bucket le=5) and 2 at 9ms (le=10000). The
+	// 99th observation is one of the slow ones, so p99 genuinely belongs in the
+	// 9ms bucket — this is the degradation case, and it must land in a real
+	// bucket rather than pinning at the old 5ms top bound.
+	for i := 0; i < 98; i++ {
 		h.observe(3)
 	}
-	for i := 0; i < 9; i++ {
-		h.observe(60)
-	}
+	h.observe(9_000)
 	h.observe(9_000)
 
 	got := h.snapshot()
 	if p50 := got.Quantile(0.50); p50 != 5 {
-		t.Errorf("p50 = %dµs, want 5 (the le=5 bucket holds 90%% of the mass)", p50)
+		t.Errorf("p50 = %dµs, want 5 (the le=5 bucket holds 98%% of the mass)", p50)
 	}
 	if p99 := got.Quantile(0.99); p99 != 10_000 {
-		t.Errorf("p99 = %dµs, want 10000 — a 9ms scoring latency must not be reported as 5000, "+
-			"which is what pinning at the old top bucket did", p99)
+		t.Errorf("p99 = %dµs, want 10000 — the 99th of 100 observations is 9ms, and a 9ms "+
+			"scoring latency must not be reported as 5000", p99)
 	}
 
 	// Only a genuinely absurd latency overflows now, and it must be reported as
@@ -90,6 +89,30 @@ func TestQuantileLandsInTheRightBucket(t *testing.T) {
 	// An empty histogram reports 0 rather than reading past the end.
 	if p := (Histogram{Bounds: latencyBuckets[:]}).Quantile(0.99); p != 0 {
 		t.Errorf("empty histogram p99 = %d, want 0", p)
+	}
+}
+
+// A φ-quantile is the value at rank φ·N: the 99th of 100 observations, not the
+// 100th. The distinction only shows when the rank lands exactly on a bucket
+// edge — which, with round observation counts, is the common case rather than
+// the corner one. Reporting the 100th observation means the dashboard shows the
+// maximum and calls it the p99, so one slow request in a hundred looks like a
+// systemic regression.
+func TestQuantileAtExactRankBoundary(t *testing.T) {
+	var h histogram
+	for i := 0; i < 99; i++ {
+		h.observe(60) // le=100
+	}
+	h.observe(9_000) // le=10000 — the single outlier, i.e. the maximum
+	got := h.snapshot()
+
+	if p99 := got.Quantile(0.99); p99 != 100 {
+		t.Errorf("p99 = %dµs, want 100: the 99th of 100 observations is 60µs, which is in the "+
+			"le=100 bucket. 10000 would be the 100th observation — the maximum, not the p99", p99)
+	}
+	// Same boundary one bucket down: rank 50 lands exactly on the le=100 edge.
+	if p50 := got.Quantile(0.50); p50 != 100 {
+		t.Errorf("p50 = %dµs, want 100", p50)
 	}
 }
 
