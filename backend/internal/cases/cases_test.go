@@ -35,9 +35,9 @@ func TestOpenResolveFlow(t *testing.T) {
 }
 
 // Under at-least-once delivery the same verdict can arrive twice (crash
-// between scoring and offset commit). Open must be idempotent per TxID or
+// between scoring and offset commit). Open must suppress the duplicate or
 // every replay would fork a duplicate case for the analyst queue.
-func TestOpenIsIdempotentPerTxID(t *testing.T) {
+func TestOpenSuppressesDuplicateWhileCaseIsOpen(t *testing.T) {
 	s := NewMemStore(10)
 	s.Open(v("tx_dup", 50))
 	s.Open(v("tx_dup", 90)) // redelivery of the same transaction
@@ -48,6 +48,31 @@ func TestOpenIsIdempotentPerTxID(t *testing.T) {
 	got := s.List(Open, 10)
 	if len(got) != 1 || got[0].Verdict.Score != 50 {
 		t.Fatalf("first verdict must win, got %+v", got)
+	}
+}
+
+// The suppression above lasts exactly as long as the case does. Once it is
+// resolved the TxID is forgotten, so a later replay opens it again — and the
+// same holds after eviction or a restart. This is pinned deliberately: the
+// alternative is remembering every TxID forever, which is the dedup cache this
+// design rejects because it would block the velocity-window rebuild that replay
+// exists to perform. What must not happen is documentation promising more than
+// this test shows.
+func TestResolvedCaseIsReopenedByAReplay(t *testing.T) {
+	s := NewMemStore(10)
+	s.Open(v("tx_dup", 50))
+	if _, err := s.Resolve("tx_dup", FalsePositive); err != nil {
+		t.Fatal(err)
+	}
+	if open, _, fp := s.Counts(); open != 0 || fp != 1 {
+		t.Fatalf("after resolve: open=%d falsePos=%d, want 0 and 1", open, fp)
+	}
+
+	s.Open(v("tx_dup", 50)) // redelivery, after the analyst already ruled on it
+	if open, _, _ := s.Counts(); open != 1 {
+		t.Fatalf("replay after resolution left %d open cases, want 1 — if this ever "+
+			"reads 0, Open started remembering resolved TxIDs and the docs need updating "+
+			"in the other direction", open)
 	}
 }
 

@@ -6,13 +6,16 @@ Status: approved · **revised 2026-08-02, see below**
 > **Revisions (2026-08-02).** Three things in this spec have since been
 > corrected or overtaken:
 >
-> 1. **"Idempotent effects" was too strong.** Case creation dedupes on `TxID`
->    and is genuinely idempotent. Verdicts are only *keyed* by it, which lets a
->    downstream keyed store or a compacted topic collapse duplicates — neither
->    of which this repo configures, so a consumer reading the live stream sees
->    the record twice. Counters and velocity windows also advance twice on
->    replay. The delivery guarantee is at-least-once; the idempotency claim
->    holds for exactly one effect.
+> 1. **"Idempotent effects" was too strong**, wherever it appears below — the
+>    Goal and the "already idempotent" reasoning included. Case creation
+>    suppresses a duplicate only *while the case is still open*; resolving or
+>    evicting it forgets the `TxID`. Verdicts are only *keyed* by it, which lets
+>    a downstream keyed store or a compacted topic collapse duplicates —
+>    neither of which this repo configures, so a consumer reading the live
+>    stream sees the record twice. Counters and velocity windows also advance
+>    twice on replay. The delivery guarantee is at-least-once, full stop.
+>    **The canonical statement is "Delivery semantics" in the README**; this
+>    spec is a historical record of the decision, not a current description.
 > 2. **`make e2e` no longer starts the broker.** That is `make kafka-up`, which
 >    needs the Compose plugin not every Docker install has. The experiments
 >    check for a reachable broker instead.

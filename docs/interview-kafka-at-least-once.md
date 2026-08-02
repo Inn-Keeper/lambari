@@ -14,6 +14,11 @@ idempotency you don't control is precisely the kind of thing a good interviewer
 pulls on — and the accurate answer is the more interesting one, because it
 names the boundary of the system you own.
 
+> The canonical statement of the contract is **Delivery semantics** in the
+> README. This document is the talk-track for it: how to tell the story, what
+> to say when pushed. Where the two ever disagree, the README wins and this
+> file is wrong — that failure has already happened four times.
+
 ## The design, as a story
 
 ### 1. Why at-least-once (and not the alternatives)
@@ -23,10 +28,11 @@ names the boundary of the system you own.
   buffered channel and offsets were committed immediately. A crash loses
   everything still buffered. For fraud scoring that's silently unscored
   transactions — the worst failure mode, because nobody knows.
-- **Exactly-once** (Kafka transactions / a durable processed-set) buys nothing
-  here: it puts a synchronous durable write into the hot path of a ~130k tx/s
-  engine to prevent duplicates that are *already harmless by construction*
-  (see idempotency below). Wrong cost/benefit.
+- **Exactly-once** (Kafka transactions / a durable processed-set) is the wrong
+  trade here: it puts a synchronous durable write into the hot path of a
+  ~130k tx/s engine, and the duplicates it removes are the ones this system
+  already absorbs cheaply (see "where duplicates land" below — the honest
+  version, which is narrower than it first looks).
 - **At-least-once**: commit only after the work is done; accept duplicates;
   make duplicates harmless. That's the sweet spot for additive scoring.
 
@@ -61,14 +67,21 @@ The counterintuitive bit that makes the design elegant:
   counters live in memory. After a crash-restart they're empty; replaying the
   uncommitted tail *rebuilds* them. A TxID dedup cache would actively block
   that recovery — the one time redelivery actually happens at scale.
-- **One effect is genuinely idempotent; the rest absorb the duplicate.** Case
-  creation dedupes on `TxID` (pinned by a unit test: same verdict twice ⇒ one
-  case). Counters and velocity windows advance twice — accepted, because that
-  second pass is the state rebuild above. Verdicts are published keyed by
-  `TxID`, which *enables* downstream dedupe or log compaction but performs
-  neither: a consumer reading the live stream sees the record twice, and needs
-  its own dedupe on the key. Say this before you are asked; it is the part of
-  the claim that does not survive scrutiny otherwise.
+- **Where duplicates land, exactly.** Say this before you are asked; it is the
+  part that does not survive scrutiny otherwise.
+  - *The case queue* suppresses a duplicate **while the case is still open** —
+    pinned by a unit test. Not forever: resolving or evicting a case forgets
+    its `TxID`, so a replay after either reopens it. Remembering every `TxID`
+    forever is the dedup cache I rejected above, and it would block the window
+    rebuild. After a restart the store is empty anyway, so replay repopulates
+    rather than duplicates.
+  - *Counters and velocity windows* advance twice — accepted, because that
+    second pass **is** the state rebuild.
+  - *The verdicts topic* is keyed by `TxID`, which enables downstream dedupe or
+    log compaction but performs neither. Nothing here configures either, so a
+    consumer reading the live stream sees the record twice and needs its own
+    dedupe on the key. That is a contract handed to whoever builds it, not a
+    property of this system.
 - So duplicates cost little inside the process, and preventing them would cost
   correctness (blocked state rebuild) plus memory plus code. What they cost
   outside it is a contract you hand to whoever consumes the topic.
@@ -119,13 +132,21 @@ never run against a clean cluster before. E2e tests earn their keep.
   batch replays on restart. Loud log either way. Records are never silently
   dropped; the failure mode is duplication, not loss.
 - *"What about duplicates across group members?"* Commit-on-revoke bounds it
-  to one in-flight batch; each member has its own window state, and the
-  effects dedupe on `TxID` regardless of which member re-scores.
-- *"Why not Kafka transactions for exactly-once?"* Exactly-once processing
-  needs the state store inside the transaction too; my state is in-memory by
-  design (latency) and replay rebuilds it. Transactions would add broker
-  round-trips per batch and still leave a downstream consumer needing to dedupe
-  on the key, because exactly-once ends at my output topic.
+  to one in-flight batch, and the case store suppresses the duplicate for any
+  case still open, whichever member re-scores. Each member has its own window
+  state though — which is a bigger problem than the duplicate, and `make
+  rebalance` measures it.
+- *"Why not Kafka transactions for exactly-once?"* Be precise here, because
+  the sloppy version is easy to catch. A transactional read-process-write loop
+  **would** stop duplicate verdicts appearing in the output topic: the produce
+  and the offset commit land atomically, and a `read_committed` consumer never
+  sees the aborted attempt. What it would *not* cover is my velocity state,
+  which is in-memory by design (latency) and is not part of any transaction —
+  a replay still re-advances those windows, and that is the replay I rely on to
+  rebuild them. Nor does it cover a side effect outside Kafka, like a
+  notification already sent. So transactions would buy a cleaner output topic
+  at the cost of broker round-trips per batch, and leave the part I actually
+  care about unchanged.
 - *"How does this scale out?"* Partitioned by `CardHash`, so one card's
   events stay ordered within a partition and each member's window state is
   self-contained for the cards it owns. Add partitions + members; rebalance

@@ -66,6 +66,17 @@ func NewMemStore(maxOpen int) *MemStore {
 	return &MemStore{open: make(map[string]*Case), maxOpen: maxOpen}
 }
 
+// Open creates a case for a flagged verdict, suppressing a duplicate **while
+// the case is still open** — which is what makes replay under at-least-once
+// delivery safe for the analyst queue in the window that matters (redelivery is
+// bounded to one in-flight batch).
+//
+// It is not idempotent for all time, and the docs must not claim it is: the
+// TxID is forgotten once the case is resolved or evicted, so a replay after
+// either reopens it. Remembering every TxID forever is the dedup cache this
+// design rejects — it would block the velocity-window rebuild that replay
+// exists to perform. After a restart the store is empty anyway, so replay
+// repopulates rather than duplicates.
 func (s *MemStore) Open(v model.Verdict) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

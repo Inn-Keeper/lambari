@@ -117,9 +117,15 @@ if the engine saturates, polling slows and consumer lag becomes visible
 
 ### Delivery semantics
 
+> **This section is the canonical statement of the delivery contract.** It got
+> restated in five other files, drifted, and had to be corrected in four of
+> them; everything else now links here instead of paraphrasing. If a claim
+> about duplicates appears somewhere without a link to this section, that copy
+> is the bug.
+
 The pipeline is **at-least-once**. Nothing here is exactly-once, and the
-duplicates that implies are handled in exactly one place — see the last bullet
-for where they are not.
+duplicates that implies land in three different places with three different
+answers — the last bullet is the one that matters.
 
 - Offsets are committed only after the engine has finished scoring the batch —
   `SubmitBatch` blocks until every transaction is done. Committing after
@@ -132,21 +138,25 @@ for where they are not.
   rather than a log line, and don't block the rest of the batch.
 - `OnPartitionsRevoked` flushes and commits before a rebalance, bounding
   redelivery to one in-flight batch.
-- **Where duplicates actually land.** One effect is genuinely idempotent: case
-  creation dedupes on transaction id. Everything else absorbs the duplicate.
-  A replayed record advances velocity windows and counters a second time.
-  Verdicts are *keyed* by transaction id, which lets a downstream keyed store
-  or a compacted topic collapse them — but nothing in this repo configures
-  compaction or downstream dedupe, so a notification or data-lake consumer
-  reading the live stream will see the same verdict twice. Keying makes dedupe
-  possible; it does not perform it, and calling that "idempotent" would be a
-  claim about consumers this repo does not own.
+- **Where duplicates actually land** — three different answers, none of them
+  "idempotent":
+  - *The case queue* suppresses a duplicate **while the case is still open**.
+    Resolving or evicting a case forgets its transaction id, so a replay after
+    either reopens it; after a restart the store is empty anyway, so replay
+    repopulates rather than duplicates. Both halves are pinned by tests.
+  - *Velocity windows and counters* advance a second time. Accepted, because
+    that second pass is exactly what rebuilds the windows after a crash.
+  - *The verdicts topic* is keyed by transaction id, which lets a downstream
+    keyed store or a compacted topic collapse duplicates — but nothing here
+    configures compaction or downstream dedupe, so a notification or data-lake
+    consumer reading the live stream sees the same verdict twice. Keying makes
+    dedupe possible; it does not perform it. A consumer that cannot tolerate a
+    repeat needs its own dedupe on the key: that is a contract handed
+    downstream, not a property of this system.
 
-  It is accepted rather than fixed with a dedupe cache because after a crash
-  the same replay is what rebuilds the empty velocity windows, and redelivery
-  is bounded to one in-flight batch. A consumer that cannot tolerate a repeat
-  needs its own dedupe on the key — that is the contract, and it should be
-  stated to whoever builds one.
+  None of this is fixed with a dedupe cache, because remembering every
+  transaction id would block the window rebuild that replay exists to perform —
+  and redelivery is bounded to one in-flight batch anyway.
 
 `make e2e` proves it: it streams transactions, SIGKILLs the real consumer
 mid-batch against Redpanda, restarts it, and asserts every verdict arrived at
@@ -319,10 +329,10 @@ caller's rate. Shed load is counted in `lambari_submissions_rejected_total`.
 **The retry contract is "resend from N", and it is not optional.** Re-posting
 the whole batch re-scores the prefix the server already accepted: velocity
 windows advance twice for those cards, counters and rule fires double-count,
-and a second verdict is published. Only case creation is genuinely idempotent
-(it dedupes on transaction id). Scoring is not, and there is no dedupe cache —
-deliberately, because the same replay is what rebuilds in-memory windows after
-a crash on the Kafka path. That is the trade: `accepted: N` is precise so the
+and a second verdict is published. Only the case queue absorbs it, and only
+while the case is still open — see [Delivery semantics](#delivery-semantics)
+for exactly where duplicates land, which is the canonical statement; this
+section does not restate it. That is the trade: `accepted: N` is precise so the
 caller can be precise, and a caller that ignores it corrupts velocity state
 rather than merely wasting work.
 

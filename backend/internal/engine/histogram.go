@@ -7,12 +7,12 @@ import "sync/atomic"
 // the windows are warm and hundreds when a shard is contended, and the
 // interesting question is which of those you are in.
 //
-// The top of the range is 1s rather than 5ms because a quantile that overflows
-// is reported as the largest finite bound (see Quantile) — a floor rendered as
-// if it were a reading. The ceiling ramp produced GC assist waves of 1.4s, so
-// millisecond-scale scoring latency is a thing that actually happens here, and
-// pinning the dashboard at "5,000µs" through it would be a lie with three
-// orders of magnitude in it.
+// The top of the range is 1s rather than 5ms because the ceiling ramp produced
+// GC assist waves of 1.4s: millisecond-scale scoring latency actually happens
+// here, and a p99 pinned at "5,000µs" through it would be a lie with three
+// orders of magnitude in it. Anything past the top bucket is reported as
+// Overflow rather than as a bound (see Quantile), so it cannot be mistaken for
+// a measurement.
 var latencyBuckets = [...]int64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10_000, 100_000, 1_000_000}
 
 // histogram counts scoring latencies per bucket, lock-free.
