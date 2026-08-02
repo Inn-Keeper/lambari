@@ -119,9 +119,11 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 		// caller's rate, so 503 rather than 429. Returning 200 with the count
 		// buried in the body is how a client misses it entirely.
 		//
-		// Retrying is safe by construction: cases dedupe on transaction id and
-		// verdicts are keyed by it, so a batch that partially landed cannot
-		// double-count on the way back.
+		// The retry contract is "resend from accepted", not "resend the batch".
+		// Re-offering the accepted prefix re-scores it: velocity windows advance
+		// twice for those cards, counters and rule fires double-count, and a
+		// second verdict is published. Only case creation dedupes on tx id.
+		// That is why the count is precise — the caller has to be too.
 		w.Header().Set("Retry-After", "1")
 		status = http.StatusServiceUnavailable
 	}

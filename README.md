@@ -117,7 +117,9 @@ if the engine saturates, polling slows and consumer lag becomes visible
 
 ### Delivery semantics
 
-The pipeline is **at-least-once with idempotent effects**:
+The pipeline is **at-least-once**. Nothing here is exactly-once, and the
+duplicates that implies are handled in exactly one place — see the last bullet
+for where they are not.
 
 - Offsets are committed only after the engine has finished scoring the batch —
   `SubmitBatch` blocks until every transaction is done. Committing after
@@ -130,12 +132,21 @@ The pipeline is **at-least-once with idempotent effects**:
   rather than a log line, and don't block the rest of the batch.
 - `OnPartitionsRevoked` flushes and commits before a rebalance, bounding
   redelivery to one in-flight batch.
-- Duplicates are harmless *for the effects that leave the process*: cases
-  dedupe on transaction id and verdicts are keyed by it. They are not free
-  inside it — a replayed record advances velocity windows and counters again.
-  That is accepted rather than fixed with a dedupe cache, because after a crash
-  the same replay is what rebuilds the empty windows, and redelivery is bounded
-  to one in-flight batch.
+- **Where duplicates actually land.** One effect is genuinely idempotent: case
+  creation dedupes on transaction id. Everything else absorbs the duplicate.
+  A replayed record advances velocity windows and counters a second time.
+  Verdicts are *keyed* by transaction id, which lets a downstream keyed store
+  or a compacted topic collapse them — but nothing in this repo configures
+  compaction or downstream dedupe, so a notification or data-lake consumer
+  reading the live stream will see the same verdict twice. Keying makes dedupe
+  possible; it does not perform it, and calling that "idempotent" would be a
+  claim about consumers this repo does not own.
+
+  It is accepted rather than fixed with a dedupe cache because after a crash
+  the same replay is what rebuilds the empty velocity windows, and redelivery
+  is bounded to one in-flight batch. A consumer that cannot tolerate a repeat
+  needs its own dedupe on the key — that is the contract, and it should be
+  stated to whoever builds one.
 
 `make e2e` proves it: it streams transactions, SIGKILLs the real consumer
 mid-batch against Redpanda, restarts it, and asserts every verdict arrived at
@@ -334,9 +345,12 @@ Scoring latency is exported as a **bucketed histogram**, not a pre-computed
 percentile, because a percentile calculated inside one process cannot be
 aggregated with another's: averaging eight pods' p99s is meaningless.
 Prometheus gets raw buckets it can sum across pods, and the dashboard's p50/p99
-are read back out of the same buckets. That makes the dashboard numbers
-bucket-quantized (a p99 reads `250µs`, not `123µs`) — the price of having one
-latency mechanism in the engine instead of two.
+are read back out of the same buckets — one latency mechanism in the engine
+instead of two. The price is that those numbers are bounds, not measurements,
+so the dashboard renders them as bounds: `≤250µs`, and `off scale` past the
+largest bucket. Printing `250µs` would be off by up to a full bucket width
+while looking exact, and printing the top bound during a stall would turn
+"slower than a second" into "exactly one second".
 
 Consumer lag comes from the high watermark that every fetch already carries —
 no admin client, no extra round-trips. It is the signal to autoscale on: a

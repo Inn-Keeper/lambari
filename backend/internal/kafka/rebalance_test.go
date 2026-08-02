@@ -54,7 +54,10 @@ func TestRebalanceLosesVelocityState(t *testing.T) {
 		maxElapsed = 45 * time.Second
 	)
 
-	ensurePartitions(t, seeds, partitions)
+	ensureTopic(t, seeds, Topic, partitions)
+	// The verdicts topic must exist before the watcher below tries to anchor to
+	// the end of it. Auto-creation happens on first produce, which is too late.
+	ensureTopic(t, seeds, VerdictTopic, 1)
 
 	runID := fmt.Sprintf("rb_%d", time.Now().UnixNano())
 	txID := func(round, card int) string { return fmt.Sprintf("%s-r%02d-c%02d", runID, round, card) }
@@ -72,13 +75,17 @@ func TestRebalanceLosesVelocityState(t *testing.T) {
 	defer watcher.Close()
 
 	// "AtEnd" is resolved when the consumer actually starts, not when NewClient
-	// returns — franz-go connects lazily. Poll once, with nothing to find, so
-	// the end offset is anchored before the first record exists; otherwise a
-	// verdict produced during that window is skipped forever and the test hangs
-	// waiting for it.
-	primeCtx, cancelPrime := context.WithTimeout(context.Background(), 5*time.Second)
-	watcher.PollFetches(primeCtx)
-	cancelPrime()
+	// returns — franz-go connects lazily — so records produced before then are
+	// skipped forever. A blind poll is not enough to rule that out: against a
+	// fresh broker it can return before the watcher has a position at all, and
+	// half the verdicts then vanish.
+	//
+	// Round-trip a sentinel instead. Once one comes back, the watcher provably
+	// has a position, and everything produced afterwards is guaranteed to be
+	// seen. Resending each attempt covers the first sentinel landing before the
+	// watcher anchored. Its TxID deliberately does not carry the runID prefix,
+	// so collect() below ignores it.
+	anchorWatcher(t, seeds, watcher, "prime_"+runID)
 
 	verdicts := map[string]model.Verdict{} // TxID -> verdict (last one wins; duplicates are identical)
 	collect := func(want int, deadline time.Duration) {
@@ -275,10 +282,53 @@ func startAPIProcess(t *testing.T, bin, brokers, addr string) *exec.Cmd {
 	return cmd
 }
 
-// ensurePartitions makes the transactions topic wide enough for two consumers
-// to own a share each. A single-partition topic cannot rebalance meaningfully:
+// anchorWatcher blocks until the watcher has provably established a position on
+// the verdicts topic, by producing a sentinel verdict and reading it back.
+// Until that round-trip completes, "consume from the end" is a promise about an
+// end offset the client may not have resolved yet.
+func anchorWatcher(t *testing.T, seeds []string, watcher *kgo.Client, sentinelID string) {
+	t.Helper()
+	producer, err := kgo.NewClient(kgo.SeedBrokers(seeds...), kgo.DefaultProduceTopic(VerdictTopic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
+
+	body, err := json.Marshal(model.Verdict{TxID: sentinelID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if res := producer.ProduceSync(ctx, &kgo.Record{Key: []byte(sentinelID), Value: body}); res.FirstErr() != nil {
+			cancel()
+			t.Fatalf("produce sentinel to %s: %v", VerdictTopic, res.FirstErr())
+		}
+		fetches := watcher.PollFetches(ctx)
+		cancel()
+
+		found := false
+		fetches.EachRecord(func(rec *kgo.Record) {
+			var v model.Verdict
+			if json.Unmarshal(rec.Value, &v) == nil && v.TxID == sentinelID {
+				found = true
+			}
+		})
+		if found {
+			return
+		}
+	}
+	t.Fatalf("watcher never returned its own sentinel — it has no position on %s, "+
+		"so verdicts produced from here on could be skipped silently", VerdictTopic)
+}
+
+// ensureTopic creates a topic, or widens an existing one, to `want` partitions.
+// The transactions topic needs enough partitions for two consumers to own a
+// share each — a single-partition topic cannot rebalance meaningfully, since
 // one member would own everything and the other would idle.
-func ensurePartitions(t *testing.T, seeds []string, want int32) {
+func ensureTopic(t *testing.T, seeds []string, topic string, want int32) {
 	t.Helper()
 	admin, err := kgo.NewClient(kgo.SeedBrokers(seeds...))
 	if err != nil {
@@ -294,28 +344,28 @@ func ensurePartitions(t *testing.T, seeds []string, want int32) {
 	// is the assertion that matters.
 	create := kmsg.NewPtrCreateTopicsRequest()
 	ct := kmsg.NewCreateTopicsRequestTopic()
-	ct.Topic, ct.NumPartitions, ct.ReplicationFactor = Topic, want, 1
+	ct.Topic, ct.NumPartitions, ct.ReplicationFactor = topic, want, 1
 	create.Topics = append(create.Topics, ct)
 	_, _ = create.RequestWith(ctx, admin)
 
 	grow := kmsg.NewPtrCreatePartitionsRequest()
 	gt := kmsg.NewCreatePartitionsRequestTopic()
-	gt.Topic, gt.Count = Topic, want
+	gt.Topic, gt.Count = topic, want
 	grow.Topics = append(grow.Topics, gt)
 	_, _ = grow.RequestWith(ctx, admin)
 
 	md := kmsg.NewPtrMetadataRequest()
 	mt := kmsg.NewMetadataRequestTopic()
-	mt.Topic = kmsg.StringPtr(Topic)
+	mt.Topic = kmsg.StringPtr(topic)
 	md.Topics = append(md.Topics, mt)
 	resp, err := md.RequestWith(ctx, admin)
 	if err != nil {
-		t.Fatalf("metadata for %s: %v", Topic, err)
+		t.Fatalf("metadata for %s: %v", topic, err)
 	}
 	if len(resp.Topics) == 0 {
-		t.Fatalf("broker reports no topic %s", Topic)
+		t.Fatalf("broker reports no topic %s", topic)
 	}
 	if got := len(resp.Topics[0].Partitions); got < int(want) {
-		t.Fatalf("topic %s has %d partitions, need %d — could not create or widen it", Topic, got, want)
+		t.Fatalf("topic %s has %d partitions, need %d — could not create or widen it", topic, got, want)
 	}
 }

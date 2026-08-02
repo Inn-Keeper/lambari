@@ -76,12 +76,15 @@ func TestQuantileLandsInTheRightBucket(t *testing.T) {
 			"which is what pinning at the old top bucket did", p99)
 	}
 
-	// Only a genuinely absurd latency overflows now, and then the largest
-	// finite bound is reported as a floor.
+	// Only a genuinely absurd latency overflows now, and it must be reported as
+	// Overflow rather than as the largest bound — a bound rendered verbatim
+	// reads as an exact measurement, which is how "slower than a second" became
+	// "1,000,000µs" on the dashboard.
 	var over histogram
 	over.observe(3 * time.Second.Microseconds())
-	if p99 := over.snapshot().Quantile(0.99); p99 != 1_000_000 {
-		t.Errorf("overflow p99 = %dµs, want the largest finite bound 1000000 as a floor", p99)
+	if p99 := over.snapshot().Quantile(0.99); p99 != Overflow {
+		t.Errorf("overflow p99 = %d, want Overflow (%d) — a real bound here is indistinguishable "+
+			"from a measurement", p99, Overflow)
 	}
 
 	// An empty histogram reports 0 rather than reading past the end.

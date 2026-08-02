@@ -93,8 +93,17 @@ End-to-end (new): `backend/internal/kafka/e2e_test.go`, skipped unless
 
 `make e2e` brings up Redpanda and runs the test.
 
+> **Revised 2026-08-02:** `make e2e` no longer starts the broker. Bringing it
+> up is `make kafka-up`, which needs the Compose plugin that not every Docker
+> install has; the experiment only needs a reachable broker and checks for one.
+> The out-of-scope list below has also moved on: metrics shipped (`/metrics`,
+> including consumer lag), and a second experiment, `make rebalance`, now
+> measures what at-least-once does *not* cover — the in-memory velocity state,
+> which dies when a partition moves to another consumer.
+
 ## Out of scope
 
 - Exactly-once / Kafka transactions (rejected above).
 - Configurable topic/consumer-group names — nothing needs them yet.
 - Metrics/observability — separate follow-up (next on the roadmap).
+  *(Shipped 2026-07-31; see the revision note above.)*

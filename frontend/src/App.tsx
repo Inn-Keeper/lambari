@@ -1,4 +1,5 @@
 import { useStream } from "./lib/useStream";
+import { formatLatencyBound } from "./lib/format";
 import { StatCard } from "./components/StatCard";
 import { ThroughputChart } from "./components/ThroughputChart";
 import { DecisionSplit, RuleBreakdown } from "./components/Breakdown";
@@ -62,7 +63,7 @@ export default function App() {
         />
         <StatCard
           label="p99 latency"
-          value={`${(stats?.p99_us ?? 0).toLocaleString()}µs`}
+          value={formatLatencyBound(stats?.p99_us)}
           hint={`queue ${stats?.queue_depth ?? 0}/${stats?.queue_cap ?? 0}`}
         />
       </div>

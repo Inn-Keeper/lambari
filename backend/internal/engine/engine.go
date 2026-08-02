@@ -222,14 +222,18 @@ func (e *Engine) rateTicker() {
 // ---- read side ------------------------------------------------------------
 
 type Stats struct {
-	Processed   int64            `json:"processed"`
-	Approved    int64            `json:"approved"`
-	Reviewed    int64            `json:"reviewed"`
-	Declined    int64            `json:"declined"`
-	Rejected    int64            `json:"rejected"` // shed: buffer was full
-	RatePerSec  int64            `json:"rate_per_sec"`
-	P50US       int64            `json:"p50_us"` // bucket upper bound, not exact
-	P99US       int64            `json:"p99_us"` // bucket upper bound, not exact
+	Processed  int64 `json:"processed"`
+	Approved   int64 `json:"approved"`
+	Reviewed   int64 `json:"reviewed"`
+	Declined   int64 `json:"declined"`
+	Rejected   int64 `json:"rejected"` // shed: buffer was full
+	RatePerSec int64 `json:"rate_per_sec"`
+	// P50US/P99US are histogram bucket *upper bounds*, not exact latencies:
+	// 100000 means "in (10ms, 100ms]". Overflow (-1) means slower than the
+	// largest bucket, 0 means nothing scored yet. Anything rendering these has
+	// to qualify them — see formatLatencyBound in the dashboard.
+	P50US       int64            `json:"p50_us"`
+	P99US       int64            `json:"p99_us"`
 	QueueDepth  int              `json:"queue_depth"`
 	QueueCap    int              `json:"queue_cap"`
 	UptimeSec   int64            `json:"uptime_sec"`

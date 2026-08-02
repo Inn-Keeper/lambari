@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -117,8 +118,11 @@ func TestCrashReplayAtLeastOnce(t *testing.T) {
 		}
 		// Never leak the process, even when an assertion Fatals mid-test: an
 		// orphan would keep :18080 and stay in the consumer group, poisoning
-		// the next run. Killing an already-dead process just errors — ignored.
-		t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
+		// the next run. SIGTERM rather than SIGKILL so the survivor leaves the
+		// group on the way out — a killed member lingers until its session
+		// times out (~45s), and the next test to join this group waits for the
+		// ghost. Signalling an already-dead process just errors — ignored.
+		t.Cleanup(func() { _ = cmd.Process.Signal(syscall.SIGTERM); _, _ = cmd.Process.Wait() })
 		return cmd
 	}
 
@@ -128,7 +132,7 @@ func TestCrashReplayAtLeastOnce(t *testing.T) {
 	// kill can never catch work in flight. Streaming keeps the consumer in
 	// small poll-score-commit cycles instead.
 	go produce(0, wave, 250*time.Microsecond)
-	waitVerdicts(wave/5, time.Minute) // some scored, more still in flight —
+	waitVerdicts(wave/5, time.Minute)          // some scored, more still in flight —
 	if err := api.Process.Kill(); err != nil { // — SIGKILL: a real crash, no graceful commit
 		t.Fatal(err)
 	}

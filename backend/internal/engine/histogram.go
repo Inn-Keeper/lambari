@@ -65,27 +65,33 @@ func (h *histogram) snapshot() Histogram {
 	return out
 }
 
+// Overflow is what Quantile returns when the quantile lands in the +Inf bucket.
+// It is deliberately not the largest bound: a caller that renders a bound as if
+// it were a reading turns "slower than a second" into "exactly one second", and
+// the only way to stop that is to make the overflow impossible to mistake for a
+// measurement.
+const Overflow int64 = -1
+
 // Quantile returns the upper bound of the bucket the q-th quantile falls in —
 // the same "no worse than this" answer Prometheus' histogram_quantile gives,
-// without interpolating. A quantile landing in the +Inf bucket reports the
-// largest finite bound, which is then a floor rather than a reading: a p99 of
-// 1,000,000µs means "at least a second", and at that point the number the
-// dashboard shows is the least of the problems.
+// without interpolating. Every result is a bound, never an exact latency: a
+// return of 100000 means "somewhere in (10ms, 100ms]". Callers that display it
+// have to say so. Returns Overflow above the largest bucket, and 0 when nothing
+// has been observed yet.
 func (h Histogram) Quantile(q float64) int64 {
 	if h.Count == 0 {
 		return 0
 	}
-	last := h.Bounds[len(h.Bounds)-1]
 	rank := int64(float64(h.Count) * q) // 0-indexed position of the quantile
 	for i, c := range h.Counts {
 		if c > rank {
 			if i == len(h.Bounds) {
-				return last
+				return Overflow
 			}
 			return h.Bounds[i]
 		}
 	}
-	return last
+	return Overflow
 }
 
 // Histogram returns the scoring-latency distribution for the metrics endpoint.
