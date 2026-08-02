@@ -53,11 +53,15 @@ func TestOpenSuppressesDuplicateWhileCaseIsOpen(t *testing.T) {
 
 // The suppression above lasts exactly as long as the case does. Once it is
 // resolved the TxID is forgotten, so a later replay opens it again — and the
-// same holds after eviction or a restart. This is pinned deliberately: the
-// alternative is remembering every TxID forever, which is the dedup cache this
-// design rejects because it would block the velocity-window rebuild that replay
-// exists to perform. What must not happen is documentation promising more than
-// this test shows.
+// same holds after eviction or a restart.
+//
+// This pins MemStore, not the Store contract. A durable implementation is
+// expected to do better: schema.sql makes tx_id the primary key, so Postgres
+// would suppress the reopen for the row's lifetime. Deduping here is safe
+// precisely because Open runs after scoring has already advanced the velocity
+// windows — it is the consumer-level dedup cache, which skips records before
+// they are scored, that would block window rebuild. The point of this test is
+// that no document may promise more than the store in front of it delivers.
 func TestResolvedCaseIsReopenedByAReplay(t *testing.T) {
 	s := NewMemStore(10)
 	s.Open(v("tx_dup", 50))

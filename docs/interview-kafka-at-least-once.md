@@ -14,10 +14,11 @@ idempotency you don't control is precisely the kind of thing a good interviewer
 pulls on — and the accurate answer is the more interesting one, because it
 names the boundary of the system you own.
 
-> The canonical statement of the contract is **Delivery semantics** in the
-> README. This document is the talk-track for it: how to tell the story, what
-> to say when pushed. Where the two ever disagree, the README wins and this
-> file is wrong — that failure has already happened four times.
+> The canonical statement of the contract is
+> [Delivery semantics](../README.md#delivery-semantics) in the README. This
+> document is the talk-track for it: how to tell the story, what to say when
+> pushed. Where the two disagree, the README wins and this file is wrong —
+> which has already happened four times.
 
 ## The design, as a story
 
@@ -59,32 +60,38 @@ names the boundary of the system you own.
    another group member, uncommitted offsets are committed (after a flush),
    bounding steady-state redelivery to at most one in-flight batch.
 
-### 3. Idempotency: effect-level, no dedup cache
+### 3. Duplicates: the insight, and two traps
 
 The counterintuitive bit that makes the design elegant:
 
 - **Replay is state recovery, not corruption.** The sliding-window velocity
   counters live in memory. After a crash-restart they're empty; replaying the
-  uncommitted tail *rebuilds* them. A TxID dedup cache would actively block
-  that recovery — the one time redelivery actually happens at scale.
-- **Where duplicates land, exactly.** Say this before you are asked; it is the
-  part that does not survive scrutiny otherwise.
-  - *The case queue* suppresses a duplicate **while the case is still open** —
-    pinned by a unit test. Not forever: resolving or evicting a case forgets
-    its `TxID`, so a replay after either reopens it. Remembering every `TxID`
-    forever is the dedup cache I rejected above, and it would block the window
-    rebuild. After a restart the store is empty anyway, so replay repopulates
-    rather than duplicates.
-  - *Counters and velocity windows* advance twice — accepted, because that
-    second pass **is** the state rebuild.
-  - *The verdicts topic* is keyed by `TxID`, which enables downstream dedupe or
-    log compaction but performs neither. Nothing here configures either, so a
-    consumer reading the live stream sees the record twice and needs its own
-    dedupe on the key. That is a contract handed to whoever builds it, not a
-    property of this system.
-- So duplicates cost little inside the process, and preventing them would cost
-  correctness (blocked state rebuild) plus memory plus code. What they cost
-  outside it is a contract you hand to whoever consumes the topic.
+  uncommitted tail *rebuilds* them. A **consumer-level** dedup cache — one that
+  skips a record before it is scored — would actively block that recovery, the
+  one time redelivery actually happens at scale.
+
+- **Then name where duplicates land, before you are asked.** Three places,
+  three different answers, and the facts are in
+  [Delivery semantics](../README.md#delivery-semantics) — deliberately not
+  repeated here. This file contradicted that section four separate times by
+  paraphrasing it; learn the three bullets from there and say them in your own
+  words at the whiteboard.
+
+**Trap one:** "at-least-once with idempotent effects" is the phrasing that
+sounds strongest and is wrong — see the opening of this document.
+
+**Trap two,** and it is subtler: do not let the argument against a dedup cache
+turn into an argument against *any* dedupe. They sit at different points in the
+pipeline. `Engine.score` advances the velocity windows and *then* fires
+`OnFlagged`, so a case store that dedupes cannot block the rebuild — it runs
+after it. `schema.sql` already makes `tx_id` the primary key, so the durable
+implementation gets lifetime case dedupe for free. "No dedup cache before
+scoring" and "no dedupe anywhere" are not the same claim, and conflating them
+is the sort of thing that unravels under one follow-up question.
+
+So: duplicates cost little inside the process, and preventing them *before
+scoring* would cost correctness plus memory plus code. What they cost outside
+it is a contract you hand to whoever consumes the topic.
 
 ### 4. Backpressure for free
 
@@ -131,11 +138,12 @@ never run against a clean cluster before. E2e tests earn their keep.
 - *"What if the DLQ publish itself fails?"* Flush fails ⇒ commit skipped ⇒
   batch replays on restart. Loud log either way. Records are never silently
   dropped; the failure mode is duplication, not loss.
-- *"What about duplicates across group members?"* Commit-on-revoke bounds it
-  to one in-flight batch, and the case store suppresses the duplicate for any
-  case still open, whichever member re-scores. Each member has its own window
-  state though — which is a bigger problem than the duplicate, and `make
-  rebalance` measures it.
+- *"What about duplicates across group members?"* Commit-on-revoke bounds it to
+  one in-flight batch. Be careful not to claim more: the case store is
+  per-process and in-memory, so a member cannot suppress a duplicate sitting in
+  another member's queue — cross-member dedupe needs the shared Postgres store,
+  where `tx_id` is the primary key. And each member has its own *window* state,
+  which is the bigger problem of the two: `make rebalance` measures it.
 - *"Why not Kafka transactions for exactly-once?"* Be precise here, because
   the sloppy version is easy to catch. A transactional read-process-write loop
   **would** stop duplicate verdicts appearing in the output topic: the produce

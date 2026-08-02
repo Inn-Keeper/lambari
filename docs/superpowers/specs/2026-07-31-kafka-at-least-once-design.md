@@ -14,8 +14,9 @@ Status: approved · **revised 2026-08-02, see below**
 >    neither of which this repo configures, so a consumer reading the live
 >    stream sees the record twice. Counters and velocity windows also advance
 >    twice on replay. The delivery guarantee is at-least-once, full stop.
->    **The canonical statement is "Delivery semantics" in the README**; this
->    spec is a historical record of the decision, not a current description.
+>    The canonical statement is
+>    [Delivery semantics](../../../README.md#delivery-semantics); this spec is a
+>    historical record of the decision, not a current description.
 > 2. **`make e2e` no longer starts the broker.** That is `make kafka-up`, which
 >    needs the Compose plugin not every Docker install has. The experiments
 >    check for a reachable broker instead.

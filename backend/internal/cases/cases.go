@@ -67,16 +67,21 @@ func NewMemStore(maxOpen int) *MemStore {
 }
 
 // Open creates a case for a flagged verdict, suppressing a duplicate **while
-// the case is still open** — which is what makes replay under at-least-once
-// delivery safe for the analyst queue in the window that matters (redelivery is
-// bounded to one in-flight batch).
+// the case is still open** — which covers the window that matters, since
+// redelivery is bounded to one in-flight batch.
 //
 // It is not idempotent for all time, and the docs must not claim it is: the
-// TxID is forgotten once the case is resolved or evicted, so a replay after
-// either reopens it. Remembering every TxID forever is the dedup cache this
-// design rejects — it would block the velocity-window rebuild that replay
-// exists to perform. After a restart the store is empty anyway, so replay
-// repopulates rather than duplicates.
+// TxID is forgotten once the case is resolved or evicted, and a replay after
+// either reopens the case. That is a property of *this* store being in-memory
+// and capped, not a design principle — `schema.sql` makes tx_id the primary
+// key, so a pgx implementation would dedupe for the row's whole lifetime and be
+// strictly better here.
+//
+// It is specifically not an argument against durable dedupe. The thing this
+// design rejects is a *consumer-level* dedup cache that skips a record before
+// scoring, because that would block the velocity-window rebuild replay exists
+// to perform. Open runs after Engine.score has already advanced those windows,
+// so deduping here cannot block anything.
 func (s *MemStore) Open(v model.Verdict) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

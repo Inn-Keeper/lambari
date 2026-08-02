@@ -140,10 +140,15 @@ answers — the last bullet is the one that matters.
   redelivery to one in-flight batch.
 - **Where duplicates actually land** — three different answers, none of them
   "idempotent":
-  - *The case queue* suppresses a duplicate **while the case is still open**.
-    Resolving or evicting a case forgets its transaction id, so a replay after
-    either reopens it; after a restart the store is empty anyway, so replay
-    repopulates rather than duplicates. Both halves are pinned by tests.
+  - *The case queue* suppresses a duplicate **while the case is still open**,
+    and only within one process. Resolving or evicting forgets the transaction
+    id, so a later replay reopens the case; two group members cannot see each
+    other's queues, so neither can suppress the other's duplicate; and the
+    store is in memory, so a restart loses every case it held — replay rebuilds
+    only those in the uncommitted tail, and everything committed earlier is
+    simply gone. That last part is a scope cut, not a subtlety: `schema.sql`
+    makes transaction id the primary key, so a Postgres-backed store would
+    survive the restart *and* dedupe for the row's lifetime.
   - *Velocity windows and counters* advance a second time. Accepted, because
     that second pass is exactly what rebuilds the windows after a crash.
   - *The verdicts topic* is keyed by transaction id, which lets a downstream
@@ -154,9 +159,11 @@ answers — the last bullet is the one that matters.
     repeat needs its own dedupe on the key: that is a contract handed
     downstream, not a property of this system.
 
-  None of this is fixed with a dedupe cache, because remembering every
-  transaction id would block the window rebuild that replay exists to perform —
-  and redelivery is bounded to one in-flight batch anyway.
+  What this design rejects is a **consumer-level dedup cache** — one that skips
+  a record before scoring — because that would block the window rebuild replay
+  exists to perform. Deduping at an *effect*, after scoring, blocks nothing;
+  the case store already does it, and Postgres would do it durably. The two are
+  easy to conflate and they are not the same argument.
 
 `make e2e` proves it: it streams transactions, SIGKILLs the real consumer
 mid-batch against Redpanda, restarts it, and asserts every verdict arrived at
