@@ -17,12 +17,12 @@ import (
 	"lambari/internal/model"
 )
 
-// TestCrashReplayAtLeastOnce proves the delivery-semantics claim against a
-// real broker: SIGKILL the consumer mid-stream, restart it, and every
-// transaction's verdict still arrives. Duplicates are allowed — that is what
-// at-least-once means. A graceful shutdown can't stand in for the crash: the
-// revoke hook would (correctly) commit on the way out, so the process dies by
-// signal, never by context.
+// TestCrashReplayAtLeastOnce proves the verdict-delivery claim against a real
+// broker: SIGKILL the consumer mid-stream, restart it, and every transaction's
+// verdict still arrives. It does not cover the in-memory case queue. Duplicates
+// are allowed — that is what at-least-once means. A graceful shutdown can't
+// stand in for the crash: the revoke hook would (correctly) commit on the way
+// out, so the process dies by signal, never by context.
 //
 // Skipped unless LAMBARI_KAFKA_BROKERS is set — run via `make e2e`.
 func TestCrashReplayAtLeastOnce(t *testing.T) {
@@ -151,6 +151,6 @@ func TestCrashReplayAtLeastOnce(t *testing.T) {
 	}
 	// Duplicates appear only when the kill lands inside a poll-score-commit
 	// cycle (a few ms wide) — allowed and correct, but not guaranteed per run.
-	// The assertion above is the invariant: nothing is ever lost.
+	// The assertion above is the invariant: no expected verdict is lost.
 	t.Logf("all %d verdicts arrived; %d duplicate publishes (allowed under at-least-once)", 2*wave, dups)
 }

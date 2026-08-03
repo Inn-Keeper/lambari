@@ -122,7 +122,9 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 		// The retry contract is "resend from accepted", not "resend the batch".
 		// Re-offering the accepted prefix re-scores it: velocity windows advance
 		// twice for those cards, counters and rule fires double-count, and a
-		// second verdict is published. Only case creation dedupes on tx id.
+		// second verdict is published. The per-process case queue suppresses a
+		// duplicate only while that case remains open; the full contract is in
+		// README.md#delivery-semantics.
 		// That is why the count is precise — the caller has to be too.
 		w.Header().Set("Retry-After", "1")
 		status = http.StatusServiceUnavailable

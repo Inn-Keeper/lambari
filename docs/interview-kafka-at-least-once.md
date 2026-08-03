@@ -1,10 +1,10 @@
 # Interview talk-track: Kafka at-least-once in Lambari
 
-The one-liner: **"My consumer is at-least-once. Duplicates are absorbed where I
-own the effect — case creation dedupes on transaction id — and keyed where I
-don't, so a downstream consumer can dedupe for itself. I have a test that
-SIGKILLs the real binary mid-stream against a real broker to prove nothing is
-ever lost."** Commit `52520f4`, test: `make e2e`.
+The one-liner: **"My Kafka transaction-to-verdict path is at-least-once: I
+commit only after scoring and flushing the outputs, and a SIGKILL test proves
+every expected verdict reaches the output topic. Effects outside that topic
+have separate contracts; the case queue in this PoC is explicitly in-memory
+and not durable."** Commit `52520f4`, test: `make e2e`.
 
 Say it that way rather than "at-least-once with idempotent effects". The
 shorter phrasing sounds better and is wrong: keying a topic by transaction id
@@ -34,8 +34,8 @@ names the boundary of the system you own.
   ~130k tx/s engine, and the duplicates it removes are the ones this system
   already absorbs cheaply (see "where duplicates land" below — the honest
   version, which is narrower than it first looks).
-- **At-least-once**: commit only after the work is done; accept duplicates;
-  make duplicates harmless. That's the sweet spot for additive scoring.
+- **At-least-once**: commit only after the work is done; accept duplicates and
+  account for them at each effect. That's the trade this system makes.
 
 ### 2. The mechanism — four pieces, each with a why
 
@@ -66,9 +66,10 @@ The counterintuitive bit that makes the design elegant:
 
 - **Replay is state recovery, not corruption.** The sliding-window velocity
   counters live in memory. After a crash-restart they're empty; replaying the
-  uncommitted tail *rebuilds* them. A **consumer-level** dedup cache — one that
-  skips a record before it is scored — would actively block that recovery, the
-  one time redelivery actually happens at scale.
+  uncommitted tail *rebuilds* them. A durable or shared processed-set checked
+  before scoring could remember a transaction those windows forgot and skip
+  the rebuild. A process-local LRU dies with the windows, so it would not block
+  recovery — but it would not dedupe the crash replay either.
 
 - **Then name where duplicates land, before you are asked.** Three places,
   three different answers, and the facts are in
@@ -80,18 +81,18 @@ The counterintuitive bit that makes the design elegant:
 **Trap one:** "at-least-once with idempotent effects" is the phrasing that
 sounds strongest and is wrong — see the opening of this document.
 
-**Trap two,** and it is subtler: do not let the argument against a dedup cache
-turn into an argument against *any* dedupe. They sit at different points in the
-pipeline. `Engine.score` advances the velocity windows and *then* fires
-`OnFlagged`, so a case store that dedupes cannot block the rebuild — it runs
-after it. `schema.sql` already makes `tx_id` the primary key, so the durable
-implementation gets lifetime case dedupe for free. "No dedup cache before
-scoring" and "no dedupe anywhere" are not the same claim, and conflating them
-is the sort of thing that unravels under one follow-up question.
+**Trap two,** and it is subtler: placement is not enough; lifetime matters too.
+A pre-score cache blocks rebuild only if it outlives the in-memory windows. A
+process-local LRU does not, while a durable/shared processed-set does. And do
+not let that argument turn into an argument against effect-level dedupe:
+`Engine.score` advances the windows and *then* fires `OnFlagged`, so a case
+store that dedupes runs after the rebuild. `schema.sql` already makes `tx_id`
+the primary key, ready for a durable implementation to preserve one case row
+per transaction.
 
-So: duplicates cost little inside the process, and preventing them *before
-scoring* would cost correctness plus memory plus code. What they cost outside
-it is a contract you hand to whoever consumes the topic.
+So: a durable pre-score processed-set would trade recovery correctness for
+deduplication. A process-local one would not solve crash duplicates. What
+duplicates cost at each effect is the contract you hand downstream.
 
 ### 4. Backpressure for free
 
@@ -115,7 +116,8 @@ backpressure machinery.
 
 Observed run: `all 10000 verdicts arrived; 42 duplicate publishes (allowed
 under at-least-once)` — the kill landed inside a poll-score-commit cycle, the
-batch replayed, nothing was lost. That log line *is* at-least-once.
+batch replayed, and no expected verdict was lost. That log line *is*
+at-least-once verdict delivery.
 
 Two subtleties worth volunteering:
 

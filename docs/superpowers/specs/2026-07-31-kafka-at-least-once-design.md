@@ -14,6 +14,10 @@ Status: approved · **revised 2026-08-02, see below**
 >    neither of which this repo configures, so a consumer reading the live
 >    stream sees the record twice. Counters and velocity windows also advance
 >    twice on replay. The delivery guarantee is at-least-once, full stop.
+>    The cache argument below also needs a lifetime qualifier: only pre-score
+>    dedupe state that outlives the in-memory windows can block their replay
+>    rebuild. A process-local LRU dies with them and is merely ineffective
+>    against crash duplicates.
 >    The canonical statement is
 >    [Delivery semantics](../../../README.md#delivery-semantics); this spec is a
 >    historical record of the decision, not a current description.

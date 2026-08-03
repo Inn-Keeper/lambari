@@ -621,11 +621,11 @@
           <div class="stage-label"><span class="num">04</span> Outputs</div>
           <div class="node accent-flow">
             <span class="t">verdicts topic</span>
-            <span class="d">Every flagged verdict, keyed by <span class="m">TxID</span> so downstream dedupe is possible.</span>
+            <span class="d">Every flagged verdict, keyed by <span class="m">TxID</span>. What that does and does not guarantee is in README <a href="../README.md#delivery-semantics"><em>Delivery semantics</em></a>.</span>
           </div>
           <div class="node">
             <span class="t">Case store</span>
-            <span class="d">In-memory behind a <span class="m">Store</span> interface; <span class="m">schema.sql</span> is the Postgres shape. Opens dedupe by <span class="m">TxID</span>.</span>
+            <span class="d">In-memory and per-process behind a <span class="m">Store</span> interface; <span class="m">schema.sql</span> is the Postgres shape. See README <a href="../README.md#delivery-semantics"><em>Delivery semantics</em></a>.</span>
           </div>
         </div>
 
@@ -672,7 +672,7 @@
         <li><strong>Produced.</strong> The load generator marshals a transaction and produces it to <span class="m">transactions</span>, keyed by card hash — so this card's events all land in one partition, in order.</li>
         <li><strong>Fetched.</strong> The consumer polls a batch. Anything that fails to decode is published to <span class="m">transactions.dlq</span> with origin topic/partition/offset headers; it never blocks the batch and never vanishes.</li>
         <li><strong>Scored.</strong> <span class="m">SubmitBatch</span> fans the batch across the worker pool and blocks until every transaction has run the five-rule chain — amount, card velocity, IP fan-out, geo mismatch, high-risk merchant. Points sum; ≥40 opens a review, ≥70 declines.</li>
-        <li><strong>Made durable, then committed.</strong> Flagged verdicts are published (keyed by <span class="m">TxID</span>) and a case opens. The verdict and DLQ producers are flushed, and only then are the offsets committed. Kill the process anywhere in this window and the batch replays — duplicates possible, no <em>record</em> lost. <span class="m">make e2e</span> proves exactly that with a SIGKILL against a real broker: it asserts every verdict reaches the topic. It says nothing about the case queue, which is in-memory and per-process and does not survive the restart at all. Where duplicates land is stated once, in the README's <em>Delivery semantics</em>; it is deliberately not restated here.</li>
+        <li><strong>Outputs made durable, then committed.</strong> Flagged verdicts are published (keyed by <span class="m">TxID</span>) and a case opens. The verdict and DLQ producers are flushed, and only then are the offsets committed. Kill the process anywhere in this window and the batch replays — duplicates possible. <span class="m">make e2e</span> proves every expected verdict reaches the topic despite that SIGKILL. It says nothing about the case queue, which is in-memory and per-process and does not survive the restart. Where duplicates land is stated once, in the README's <a href="../README.md#delivery-semantics"><em>Delivery semantics</em></a>; it is deliberately not restated here.</li>
         <li><strong>Streamed.</strong> Once per second the API pushes an SSE frame — stats, recent verdicts, case counts — and the dashboard's reducer applies it. The frame counter doubles as the review queue's refetch signal.</li>
         <li><strong>Triaged.</strong> The queue lists open cases worst-first and freezes while your pointer is over it. Resolving is optimistic: the row leaves immediately, comes back with an error if the server refused, stays gone with a note if the case was already evicted.</li>
         <li><strong>Labeled.</strong> The resolution — confirmed fraud or false positive — is stored. That label stream is the feedback loop the whole design points at.</li>
@@ -873,7 +873,7 @@
           <dt>The bug</dt>
           <dd>Committing after enqueue is at-most-once. A crash drops everything still buffered — in a fraud system, silently. And async producers add a second window: a verdict still in the client buffer dies with the process even though its offset was committed.</dd>
           <dt>Move</dt>
-          <dd class="pick">At-least-once: commit only after scoring, flush the producers before every commit. Where the resulting duplicates land is a longer answer with three parts, and it lives in one place — the README's <em>Delivery semantics</em> — rather than being paraphrased here. Same shape as a retried wallet call, which is a connection worth making out loud.</dd>
+          <dd class="pick">At-least-once: commit only after scoring, flush the producers before every commit. Where the resulting duplicates land is a longer answer with three parts, and it lives in one place — the README's <a href="../README.md#delivery-semantics"><em>Delivery semantics</em></a> — rather than being paraphrased here. Same shape as a retried wallet call, which is a connection worth making out loud.</dd>
         </dl>
       </div>
 
@@ -943,12 +943,12 @@
           <tr>
             <td>Kafka consumer</td>
             <td><span class="state have">Built</span></td>
-            <td>At-least-once end to end: commit after scoring, DLQ, commit-on-revoke, producers flushed before every commit. Proven by a crash-replay e2e that SIGKILLs the real binary against a real broker.</td>
+            <td>At-least-once Kafka verdict delivery: commit after scoring, DLQ, commit-on-revoke, producers flushed before every commit. Proven by a crash-replay e2e that SIGKILLs the real binary against a real broker; case durability is outside that proof. See README <a href="../README.md#delivery-semantics"><em>Delivery semantics</em></a>.</td>
           </tr>
           <tr>
             <td>React console</td>
             <td><span class="state have">Built</span></td>
-            <td>SSE into a pure reducer, push-driven review queue that holds still under the pointer, optimistic resolve with rollback. 20 tests.</td>
+            <td>SSE into a pure reducer, push-driven review queue that holds still under the pointer, optimistic resolve with rollback. 23 tests.</td>
           </tr>
           <tr>
             <td>Case store + labels</td>
@@ -963,7 +963,7 @@
           <tr>
             <td>Real e2e ceiling</td>
             <td><span class="state gap">Unknown</span></td>
-            <td>The crash-replay e2e proves the semantics; the throughput ceiling is still the loadgen flag, not a discovered limit. Push it until it breaks and name the bottleneck.</td>
+            <td>The crash-replay e2e proves the Kafka verdict-delivery semantics; the throughput ceiling is still the loadgen flag, not a discovered limit. Push it until it breaks and name the bottleneck.</td>
           </tr>
           <tr>
             <td>Distributed state</td>
@@ -1216,4 +1216,3 @@
   </footer>
 
 </div>
-

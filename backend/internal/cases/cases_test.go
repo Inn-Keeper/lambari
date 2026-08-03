@@ -59,9 +59,8 @@ func TestOpenSuppressesDuplicateWhileCaseIsOpen(t *testing.T) {
 // expected to do better: schema.sql makes tx_id the primary key, so Postgres
 // would suppress the reopen for the row's lifetime. Deduping here is safe
 // precisely because Open runs after scoring has already advanced the velocity
-// windows — it is the consumer-level dedup cache, which skips records before
-// they are scored, that would block window rebuild. The point of this test is
-// that no document may promise more than the store in front of it delivers.
+// windows. The point of this test is that no document may promise more than the
+// store in front of it delivers.
 func TestResolvedCaseIsReopenedByAReplay(t *testing.T) {
 	s := NewMemStore(10)
 	s.Open(v("tx_dup", 50))

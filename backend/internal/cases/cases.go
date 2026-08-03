@@ -77,11 +77,9 @@ func NewMemStore(maxOpen int) *MemStore {
 // key, so a pgx implementation would dedupe for the row's whole lifetime and be
 // strictly better here.
 //
-// It is specifically not an argument against durable dedupe. The thing this
-// design rejects is a *consumer-level* dedup cache that skips a record before
-// scoring, because that would block the velocity-window rebuild replay exists
-// to perform. Open runs after Engine.score has already advanced those windows,
-// so deduping here cannot block anything.
+// Open runs after Engine.score has already advanced the velocity windows, so
+// deduping at this effect cannot block their replay-driven rebuild. A durable
+// Store can safely preserve TxIDs for the case row's lifetime.
 func (s *MemStore) Open(v model.Verdict) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

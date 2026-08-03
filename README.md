@@ -11,9 +11,10 @@ over SSE.
 - ~260,000 tx/sec accepted over the HTTP ingest path with 8 concurrent senders,
   at which point the engine's buffer saturates and ingest begins shedding load.
   The load generator reports what the server *kept*, not what it was offered.
-- Delivery is **at-least-once** end to end, proven by a test that SIGKILLs the
-  consumer mid-batch against a real broker and asserts nothing was lost
-  (`make e2e`).
+- Kafka transaction-to-verdict delivery is **at-least-once**, proven by a test
+  that SIGKILLs the consumer mid-batch against a real broker and asserts every
+  expected verdict reaches the output topic (`make e2e`). The in-memory case
+  queue is outside that guarantee; see [Delivery semantics](#delivery-semantics).
 
 Includes **case management**: every review/decline verdict opens a case in
 a review queue (worst score first). Analyst resolutions — confirmed fraud
@@ -95,7 +96,7 @@ API between configurations: state accumulated by one run handicaps the next.
 make kafka-up        # Redpanda on :19092, console UI on :8081
 make kafka-run       # API consumes from the `transactions` topic
 make kafka-loadgen   # produce 5000 tx/s into the topic
-make e2e             # crash-replay proof: SIGKILL the consumer, assert no loss
+make e2e             # crash-replay proof: every expected verdict reaches Kafka
 make rebalance       # state-loss proof: SIGTERM one of two consumers, count the
                      #   velocity windows that vanish with the partitions
 ```
@@ -159,16 +160,19 @@ answers — the last bullet is the one that matters.
     repeat needs its own dedupe on the key: that is a contract handed
     downstream, not a property of this system.
 
-  What this design rejects is a **consumer-level dedup cache** — one that skips
-  a record before scoring — because that would block the window rebuild replay
-  exists to perform. Deduping at an *effect*, after scoring, blocks nothing;
-  the case store already does it, and Postgres would do it durably. The two are
-  easy to conflate and they are not the same argument.
+  What this design rejects is a **durable or shared processed-set checked before
+  scoring**. Because it outlives the in-memory windows, it could remember a
+  transaction those windows forgot and skip the replay they need to rebuild. A
+  process-local LRU dies with the windows, so it does not block recovery — but
+  it also cannot dedupe a crash replay. Deduping at an *effect*, after scoring,
+  blocks nothing; the case store already does it, and Postgres would do it
+  durably. Placement and lifetime both matter.
 
-`make e2e` proves it: it streams transactions, SIGKILLs the real consumer
-mid-batch against Redpanda, restarts it, and asserts every verdict arrived at
-least once. A graceful shutdown can't stand in for a crash — the revoke hook
-correctly commits on the way out, so the test kills by signal.
+`make e2e` proves the Kafka verdict-delivery guarantee: it streams
+transactions, SIGKILLs the real consumer mid-batch against Redpanda, restarts
+it, and asserts every expected verdict arrived at least once. A graceful
+shutdown can't stand in for a crash — the revoke hook correctly commits on the
+way out, so the test kills by signal.
 
 ### Velocity state is partition-local — and it dies on rebalance
 
