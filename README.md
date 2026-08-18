@@ -5,16 +5,32 @@ payment transactions against velocity, geo, amount, and merchant-risk rules,
 fed either over HTTP or Kafka, with a live React dashboard streaming verdicts
 over SSE.
 
-**Measured on a developer laptop** — not a tuned deployment:
+**Measured on a Mac mini M1 (8 cores, 16 GB)** — a developer laptop, not a tuned
+deployment. Every figure is what the server *kept*; shed load is counted
+separately and never folded into the rate.
 
-- ~130,000 tx/sec engine throughput (`make bench`), p99 scoring latency under 50µs.
-- ~260,000 tx/sec accepted over the HTTP ingest path with 8 concurrent senders,
-  at which point the engine's buffer saturates and ingest begins shedding load.
-  The load generator reports what the server *kept*, not what it was offered.
+- **~710,000–790,000 tx/s** scoring throughput with no IO (`make bench`, 1,271
+  ns/op on the latest run), p99 scoring latency in the **≤50µs** bucket. It moves
+  run to run with thermal state and what else is on the machine, so it is a range
+  rather than a figure. This is the engine in isolation — the ceiling the rest of
+  the pipeline is measured against, not a system throughput number.
+- **~447,000 tx/s** peak over the HTTP ingest path at 6 concurrent senders,
+  shedding 7.7% — with the load generator on the same 8 cores as the server, so
+  the server-only ceiling is higher. Past the peak more load buys less work: at 16
+  senders the server accepts ~273,000 tx/s while shedding 52.5% — congestion
+  collapse, which is why ingest sheds a prefix and answers 503 rather than queueing.
+- **~150,000–180,000 tx/s** sustained through the full Kafka path — consume,
+  score, publish verdict, commit — with one consumer. This is the honest
+  end-to-end number, and roughly 3× slower than producing into the topic.
 - Kafka transaction-to-verdict delivery is **at-least-once**, proven by a test
   that SIGKILLs the consumer mid-batch against a real broker and asserts every
   expected verdict reaches the output topic (`make e2e`). The in-memory case
   queue is outside that guarantee; see [Delivery semantics](#delivery-semantics).
+- **The wall is state memory, not scoring CPU**: sustained load grows the live
+  heap into the gigabytes and GC takes over long before scoring runs out of CPU.
+  See [What actually limits it](#what-actually-limits-it-state-memory-not-scoring-cpu).
+
+Stage-by-stage figures: [Throughput ceiling (measured)](#throughput-ceiling-measured).
 
 Includes **case management**: every review/decline verdict opens a case in
 a review queue (worst score first). Analyst resolutions — confirmed fraud
