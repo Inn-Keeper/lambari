@@ -9,6 +9,7 @@ package cases
 
 import (
 	"errors"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -56,7 +57,7 @@ type Store interface {
 type MemStore struct {
 	mu       sync.Mutex
 	open     map[string]*Case
-	openIDs  []string // insertion order, oldest first
+	openIDs  []string // exactly the open cases, oldest first
 	maxOpen  int
 	history  []Case // resolved, newest last, capped at maxOpen
 	resolved struct{ confirmed, falsePos int64 }
@@ -77,12 +78,9 @@ func (s *MemStore) Open(v model.Verdict) {
 	}
 	s.open[v.TxID] = &Case{ID: v.TxID, Verdict: v, Status: Open, OpenedAt: time.Now().UnixMilli()}
 	s.openIDs = append(s.openIDs, v.TxID)
-	// evict oldest; openIDs may hold ids already resolved (removed from the
-	// map), so skip those until an actual eviction happens.
-	for len(s.open) > s.maxOpen && len(s.openIDs) > 0 {
-		evict := s.openIDs[0]
+	if len(s.openIDs) > s.maxOpen {
+		delete(s.open, s.openIDs[0])
 		s.openIDs = s.openIDs[1:]
-		delete(s.open, evict)
 	}
 }
 
@@ -123,6 +121,8 @@ func (s *MemStore) Resolve(id string, r Resolution) (Case, error) {
 		return Case{}, ErrNotFound
 	}
 	delete(s.open, id)
+	// Linear, but the list is at most maxOpen long.
+	s.openIDs = slices.DeleteFunc(s.openIDs, func(x string) bool { return x == id })
 	c.Status = Resolved
 	c.Resolution = r
 	c.ResolvedAt = time.Now().UnixMilli()

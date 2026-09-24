@@ -40,6 +40,12 @@ function withoutBusy(cases: Case[], busy: string | null): Case[] {
   return busy ? cases.filter((c) => c.id !== busy) : cases;
 }
 
+/** a snapshot taken while paused may predate the resolve; drop the case from it
+ *  so resuming can't bring it back */
+function withoutDeferred(s: QueueState): Case[] | null {
+  return s.deferred && withoutBusy(s.deferred, s.busy);
+}
+
 // ponytail: single in-flight resolve; make pending a map if analysts need burst triage
 export function casesReducer(s: QueueState, a: QueueAction): QueueState {
   switch (a.type) {
@@ -74,11 +80,12 @@ export function casesReducer(s: QueueState, a: QueueAction): QueueState {
       };
     }
     case "resolveOk":
-      return { ...s, busy: null, pending: null };
+      return { ...s, busy: null, pending: null, deferred: withoutDeferred(s) };
     case "resolveGone":
       return {
         ...s,
         busy: null,
+        deferred: withoutDeferred(s),
         pending: null,
         error: s.pending
           ? `Case ${s.pending.c.id} was already resolved or evicted`

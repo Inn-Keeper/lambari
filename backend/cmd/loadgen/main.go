@@ -80,7 +80,9 @@ func main() {
 	// a transport error: a 200 that quietly dropped half the batch is the
 	// failure mode this tool exists to expose.
 	var send func([]model.Transaction) (rejected int, err error)
-	var asyncFailures func() int64
+	// settle flushes async sends and returns how many failed; nil for HTTP,
+	// whose results are known when each request returns.
+	var settle func() int64
 
 	if *kafkaBrokers != "" {
 		producer, err := kafka.NewProducer([]string{*kafkaBrokers})
@@ -88,8 +90,10 @@ func main() {
 			slog.Error("kafka connect", "err", err)
 			os.Exit(1)
 		}
-		defer producer.Close()
-		asyncFailures = producer.Failures
+		settle = func() int64 {
+			producer.Close() // flushes: failures are only final after this
+			return producer.Failures()
+		}
 		send = func(batch []model.Transaction) (int, error) {
 			for _, tx := range batch {
 				if err := producer.Send(ctx, tx); err != nil {
@@ -129,7 +133,8 @@ func main() {
 	}
 	wg.Wait()
 
-	report(time.Since(start), *rate, sent.Load(), failed.Load(), rejected.Load(), asyncFailures)
+	ok, bad := settleAsync(sent.Load(), failed.Load(), settle)
+	report(time.Since(start), *rate, ok, bad, rejected.Load()) // includes the flush
 }
 
 // httpSender posts a batch and reports how much of it the server shed. A 503
@@ -203,16 +208,23 @@ func runWorker(
 	}
 }
 
-func report(elapsed time.Duration, rate int, sent, failed, rejected int64, asyncFailures func() int64) {
+// settleAsync moves publishes that failed after Send returned from accepted to
+// failed, so throughput counts only what the broker actually took.
+func settleAsync(sent, failed int64, settle func() int64) (int64, int64) {
+	if settle == nil {
+		return sent, failed
+	}
+	n := settle()
+	return sent - n, failed + n
+}
+
+func report(elapsed time.Duration, rate int, sent, failed, rejected int64) {
 	secs := elapsed.Seconds()
 	achieved := float64(sent) / secs
 
 	fmt.Printf("accepted %d in %.1fs — %.0f tx/s achieved", sent, secs, achieved)
 	if rate > 0 {
 		fmt.Printf(" (requested %d, %.0f%%)", rate, achieved/float64(rate)*100)
-	}
-	if asyncFailures != nil {
-		failed += asyncFailures()
 	}
 	if failed > 0 {
 		fmt.Printf(" · %d failed", failed)

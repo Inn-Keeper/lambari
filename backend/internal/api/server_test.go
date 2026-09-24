@@ -124,9 +124,9 @@ func TestIngestSheddingReturns503(t *testing.T) {
 // "accepted: N" has to mean "the first N", or the caller cannot tell which
 // transactions to resend.
 func TestIngestAcceptsAPrefixThenSheds(t *testing.T) {
-	// Learn the buffer's capacity from a throwaway engine, then fill a fresh
-	// one to two slots short of it. Neither is started, so nothing drains and
-	// the arithmetic stays exact.
+	// Each card has its own queue, so use one card throughout. Learn that
+	// queue's capacity from a throwaway engine, then fill a fresh one to two
+	// slots short of it. Neither is started, so nothing drains.
 	probe := engine.New()
 	capacity := 0
 	for probe.TrySubmit(tx(0)) {
@@ -135,11 +135,22 @@ func TestIngestAcceptsAPrefixThenSheds(t *testing.T) {
 
 	eng := engine.New()
 	for i := 0; i < capacity-2; i++ {
-		eng.TrySubmit(tx(i))
+		eng.TrySubmit(tx(0))
 	}
 	s := NewServer(eng, cases.NewMemStore(10), "inline")
 
-	code, body, _ := post(t, s, 5)
+	batch := make([]model.Transaction, 5)
+	for i := range batch {
+		batch[i] = tx(i)
+		batch[i].CardHash = tx(0).CardHash
+	}
+	body0, _ := json.Marshal(batch)
+	rec := postRaw(s, body0)
+	var body map[string]int
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	code := rec.Code
 	if code != 503 {
 		t.Errorf("status = %d, want 503 — part of the batch was shed", code)
 	}
@@ -169,6 +180,7 @@ func TestIngestReturns200WhenNothingIsShed(t *testing.T) {
 
 func postRaw(s *Server, body []byte) *httptest.ResponseRecorder {
 	req := httptest.NewRequest("POST", "/api/transactions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	return rec
@@ -216,9 +228,32 @@ func TestStopSimulatorBeforeEngineStopDoesNotPanic(t *testing.T) {
 	s := NewServer(eng, cases.NewMemStore(10), "inline")
 
 	req := httptest.NewRequest("POST", "/api/simulate", strings.NewReader(`{"rate":100000}`))
+	req.Header.Set("Content-Type", "application/json")
 	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
 	time.Sleep(50 * time.Millisecond) // let it submit a few batches
 
 	s.StopSimulator()
 	eng.Stop()
+}
+
+// A cross-origin form or text/plain POST needs no CORS preflight, so it would
+// reach the handler. It must not be able to resolve a case.
+func TestNonJSONPostIsRejected(t *testing.T) {
+	store := cases.NewMemStore(10)
+	store.Open(model.Verdict{TxID: "tx_1", Score: 50, Decision: model.Review})
+	s := NewServer(engine.New(), store, "inline")
+
+	req := httptest.NewRequest("POST", "/api/cases/tx_1/resolve",
+		strings.NewReader(`{"resolution":"false_positive"}`))
+	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("Origin", "https://evil.example")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != 415 {
+		t.Errorf("status = %d, want 415", rec.Code)
+	}
+	if open, _, _ := store.Counts(); open != 1 {
+		t.Error("a text/plain POST resolved the case")
+	}
 }

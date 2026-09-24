@@ -1,6 +1,7 @@
 package cases
 
 import (
+	"fmt"
 	"testing"
 
 	"lambari/internal/model"
@@ -96,5 +97,37 @@ func TestResolvedHistoryIsBounded(t *testing.T) {
 	open, conf, _ := s.Counts()
 	if open != 0 || conf != 6 {
 		t.Fatalf("counts should survive eviction: open=%d conf=%d", open, conf)
+	}
+}
+
+// Resolving must drop the id from the insertion order, or the list grows
+// forever and a reopened case inherits its old, older position.
+func TestInsertionOrderTracksOnlyOpenCases(t *testing.T) {
+	s := NewMemStore(2)
+	for i := 0; i < 1000; i++ {
+		id := fmt.Sprintf("tx_%d", i)
+		s.Open(v(id, 50))
+		if _, err := s.Resolve(id, FalsePositive); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(s.openIDs); n != 0 {
+		t.Fatalf("%d ids retained with no open cases", n)
+	}
+
+	s.Open(v("tx_a", 50))
+	s.Open(v("tx_b", 50))
+	if _, err := s.Resolve("tx_a", FalsePositive); err != nil {
+		t.Fatal(err)
+	}
+	s.Open(v("tx_a", 50)) // replay reopens it: now the newest
+	s.Open(v("tx_c", 50)) // over capacity: the oldest open case is tx_b
+
+	ids := map[string]bool{}
+	for _, c := range s.List(Open, 10) {
+		ids[c.ID] = true
+	}
+	if !ids["tx_a"] || ids["tx_b"] || !ids["tx_c"] {
+		t.Fatalf("open = %v, want tx_a and tx_c (tx_b evicted as oldest)", ids)
 	}
 }

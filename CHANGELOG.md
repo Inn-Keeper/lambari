@@ -5,6 +5,29 @@ Notable changes, newest first. Earlier history is in `git log`.
 ## 2026-09-24
 
 ### Fixed
+- Engine: late events no longer erase an active velocity window. Windows kept
+  the last 30 *arrivals* and expired entries relative to the incoming event's
+  own time, so 30 events from six minutes ago pushed out 30 current ones and
+  the next current event scored 0 instead of 40. Windows are now sorted by
+  timestamp, expire relative to the newest one, and keep the newest 30; an
+  event older than the whole window is scored alone.
+- Engine: one card's transactions are scored in the order they were
+  submitted. Workers used to share one queue, so the extreme-velocity flag
+  could land on an earlier transaction for the card (88 of 200 test runs);
+  each card now always goes to the same worker's queue.
+- Kafka: records from healthy partitions are scored when another partition
+  in the same fetch errors, and records from the last poll are scored on
+  shutdown. Both used to be dropped while still counting as polled, so a
+  later commit could skip them.
+- Kafka: lag is no longer reported for partitions this consumer lost.
+- API: POSTs must be `application/json` (else `415`). A cross-origin
+  `text/plain` POST needs no CORS preflight and could resolve cases.
+- Case store: resolving removes the case from the insertion order, which
+  grew without bound and could evict a reopened case too early.
+- Load generator: Kafka throughput is reported after the flush and excludes
+  failed publishes, which it used to count as accepted.
+- Dashboard: a case resolved while the queue was paused no longer reappears
+  on resume.
 - CI: the rebalance experiment waits until both consumers own partitions.
   On a fast runner warm-up finished before the second one joined, so every
   card moved and the run failed as a full reset.

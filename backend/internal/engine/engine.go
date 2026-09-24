@@ -18,8 +18,14 @@ type job struct {
 
 // Engine is a bounded worker pool that scores transactions concurrently.
 // Submit blocks once the buffer is full, so backpressure reaches the caller.
+//
+// Each worker has its own queue, and a card always goes to the same one, so
+// one card's transactions are scored in the order they were submitted. The
+// velocity rule depends on that: with a shared queue, two workers could score
+// a card's 8th and 1st transactions in either order. The IP rule stays
+// order-insensitive; one IP spans many cards, which Kafka never ordered.
 type Engine struct {
-	in    chan job
+	ins   []chan job // one per worker, picked by card hash
 	rules []Rule
 	state *State
 	done  chan struct{}
@@ -64,8 +70,20 @@ const (
 )
 
 func New() *Engine {
+	// Workers = 2× logical CPUs: scoring is CPU-light but lock-punctuated, so
+	// oversubscribing hides contention stalls.
+	workers := runtime.NumCPU() * 2
+	ins := make([]chan job, workers)
+	for i := range ins {
+		// Split bufferSize exactly, so capacity reads the same on any machine.
+		size := bufferSize / workers
+		if i < bufferSize%workers {
+			size++
+		}
+		ins[i] = make(chan job, size)
+	}
 	e := &Engine{
-		in:        make(chan job, bufferSize),
+		ins:       ins,
 		rules:     DefaultRules(),
 		state:     NewState(),
 		done:      make(chan struct{}),
@@ -83,13 +101,11 @@ func (e *Engine) OnFlagged(fn func(model.Verdict)) {
 	e.onFlagged = fn
 }
 
-// Start launches the worker pool. Workers = 2× logical CPUs: scoring is
-// CPU-light but lock-punctuated, so oversubscribing hides contention stalls.
+// Start launches one worker per queue.
 func (e *Engine) Start() {
-	workers := runtime.NumCPU() * 2
-	for i := 0; i < workers; i++ {
+	for _, in := range e.ins {
 		e.wg.Add(1)
-		go e.worker()
+		go e.worker(in)
 	}
 	e.state.StartSweeper(e.done)
 	go e.rateTicker()
@@ -97,7 +113,9 @@ func (e *Engine) Start() {
 
 // Stop drains and shuts down.
 func (e *Engine) Stop() {
-	close(e.in)
+	for _, in := range e.ins {
+		close(in)
+	}
 	e.wg.Wait()
 	close(e.done)
 }
@@ -105,14 +123,19 @@ func (e *Engine) Stop() {
 // Submit queues one transaction. Blocks only when the buffer is full.
 // Fire-and-forget: it returns once the transaction is queued, not scored.
 func (e *Engine) Submit(tx model.Transaction) {
-	e.in <- job{tx: tx}
+	e.queueFor(tx) <- job{tx: tx}
+}
+
+// queueFor picks the card's queue. Same hash as the velocity shards.
+func (e *Engine) queueFor(tx model.Transaction) chan job {
+	return e.ins[shardFor(tx.CardHash)%uint32(len(e.ins))]
 }
 
 // TrySubmit queues without blocking; returns false if the engine is saturated.
 // A false is shed load: report it with RecordRejected.
 func (e *Engine) TrySubmit(tx model.Transaction) bool {
 	select {
-	case e.in <- job{tx: tx}:
+	case e.queueFor(tx) <- job{tx: tx}:
 		return true
 	default:
 		return false
@@ -134,14 +157,14 @@ func (e *Engine) SubmitBatch(txs []model.Transaction) {
 	var wg sync.WaitGroup
 	wg.Add(len(txs))
 	for _, tx := range txs {
-		e.in <- job{tx: tx, wg: &wg}
+		e.queueFor(tx) <- job{tx: tx, wg: &wg}
 	}
 	wg.Wait()
 }
 
-func (e *Engine) worker() {
+func (e *Engine) worker(in <-chan job) {
 	defer e.wg.Done()
-	for j := range e.in {
+	for j := range in {
 		e.score(&j.tx)
 		if j.wg != nil {
 			j.wg.Done()
@@ -258,12 +281,18 @@ func (e *Engine) Snapshot() Stats {
 		flagged = float64(rev+dec) / float64(p)
 	}
 
+	depth, capacity := 0, 0
+	for _, in := range e.ins {
+		depth += len(in)
+		capacity += cap(in)
+	}
+
 	return Stats{
 		Processed: p, Approved: e.approved.Load(), Reviewed: rev, Declined: dec,
 		Rejected:   e.rejected.Load(),
 		RatePerSec: e.lastRate.Load(),
 		P50US:      lat.Quantile(0.50), P99US: lat.Quantile(0.99),
-		QueueDepth: len(e.in), QueueCap: cap(e.in),
+		QueueDepth: depth, QueueCap: capacity,
 		UptimeSec: int64(time.Since(e.startedAt).Seconds()),
 		RuleFires: fires, FlaggedRate: flagged,
 	}

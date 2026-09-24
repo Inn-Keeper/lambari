@@ -9,9 +9,9 @@ over SSE.
 deployment. Every figure is what the server *kept*; shed load is counted
 separately and never folded into the rate.
 
-- **~1.2–1.5M tx/s** scoring throughput with no IO (`make bench`, 677–817
-  ns/op), up from ~620–760k once each velocity window was capped at 30
-  timestamps (measured back to back on the same machine). p99 scoring latency in the **≤50µs** bucket. It moves
+- **~1.0–2.4M tx/s** scoring throughput with no IO (`make bench`, six runs),
+  up from ~620–760k once each velocity window was capped at 30 timestamps
+  (measured back to back on the same machine). p99 scoring latency in the **≤50µs** bucket. It moves
   run to run with thermal state and what else is on the machine, so it is a range
   rather than a figure. This is the engine in isolation — the ceiling the rest of
   the pipeline is measured against, not a system throughput number.
@@ -247,7 +247,7 @@ These rows predate the 30-timestamp window cap and have not been re-run since:
 
 | Stage | Result |
 |---|---|
-| Engine alone, no IO (`make bench`) | **711,895 tx/s** (before the window cap; ~1.2–1.5M after) |
+| Engine alone, no IO (`make bench`) | **711,895 tx/s** (before the window cap; ~1.0–2.4M after) |
 | HTTP ingest, 1 worker | 186,536 tx/s · 0% shed |
 | HTTP ingest, 2 workers | 308,510 tx/s · 0% shed |
 | HTTP ingest, 4 workers | 407,282 tx/s · 0.4% shed |
@@ -312,7 +312,7 @@ capacity when traffic is sustained.
  (topic:            │   (group: lambari-scoring)│                 │
   transactions)     │                            ▼                 │
                     │   ┌────────────────────────────────┐         │
-                    │   │ Engine: chan (16k buf)         │         │
+                    │   │ Engine: 16k buf, one queue/card│         │
                     │   │  → N×2 CPU workers             │         │
                     │   │  → rules: amount · velocity ·  │         │
                     │   │     ip fan-out · geo · MCC     │         │
@@ -331,12 +331,20 @@ capacity when traffic is sustained.
 
 ### Engine design notes
 
-- **Worker pool, not per-request goroutines**: a bounded channel (16,384) in
-  front of `2 × NumCPU` workers. `Submit` blocks when full — backpressure
-  propagates upstream instead of OOMing.
+- **Worker pool, not per-request goroutines**: `2 × NumCPU` workers, each with
+  its own queue (16,384 slots in total). A card always goes to the same queue,
+  so its transactions are scored in order and the velocity flag lands on the
+  right one. `Submit` blocks when that queue is full — backpressure propagates
+  upstream instead of OOMing. The price: one hot card is limited to one
+  worker.
 - **Sharded velocity state**: sliding-window counters live in 256 mutex
   shards keyed by FNV hash, so thousands of concurrent workers don't fight
   over one lock. A background sweeper evicts idle keys to keep memory flat.
+- **Late events**: each window is kept sorted by timestamp, so an event that
+  arrives out of order counts what came before it *in time*, and can never
+  push newer history out. Entries expire relative to the newest timestamp seen
+  for the key. An event older than its whole window is scored alone and leaves
+  the window unchanged.
 - **Lock-free reads**: counters are atomics; the stats endpoint never stalls
   the hot path. Latency lands in a lock-free bucketed histogram, and the
   dashboard's p50/p99 are read back out of those same buckets.
@@ -355,6 +363,14 @@ capacity when traffic is sustained.
 | `GET /api/cases` | Review queue (`?status=resolved` for labeled history) |
 | `POST /api/cases/{id}/resolve` | `{"resolution":"confirmed_fraud"\|"false_positive"}` |
 | `GET /metrics` | Prometheus scrape (root-level by convention, not under `/api`) |
+
+### Writes must be JSON
+
+Every POST must send `Content-Type: application/json`, or it gets `415`. There
+is no auth and no CORS: a browser only sends a cross-origin JSON POST after a
+preflight, which fails, so another website can't resolve cases or start the
+simulator. The forms and `text/plain` requests it can send without one are
+rejected.
 
 ### Backpressure at the ingest boundary
 

@@ -139,3 +139,15 @@ func TestHTTPSenderReportsRealFailures(t *testing.T) {
 		t.Error("a 500 must surface as an error, not as silent success")
 	}
 }
+
+// Kafka publishes fail asynchronously; a failed one must not count as
+// accepted throughput.
+func TestSettleAsyncMovesFailedPublishesOutOfAccepted(t *testing.T) {
+	sent, failed := settleAsync(100, 2, func() int64 { return 100 })
+	if sent != 0 || failed != 102 {
+		t.Fatalf("sent=%d failed=%d, want 0 and 102", sent, failed)
+	}
+	if sent, failed := settleAsync(100, 2, nil); sent != 100 || failed != 2 {
+		t.Fatalf("HTTP path changed: sent=%d failed=%d", sent, failed)
+	}
+}

@@ -43,6 +43,17 @@ func (t *lagTracker) Observe(partition int32, highWatermark, lastOffset int64) {
 	t.parts[partition] = p
 }
 
+// Forget drops partitions this consumer no longer owns. Their last lag would
+// otherwise stay exported forever, double-counting backlog the new owner
+// reports and keeping an autoscaler from ever seeing it drain.
+func (t *lagTracker) Forget(partitions []int32) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, p := range partitions {
+		delete(t.parts, p)
+	}
+}
+
 // Snapshot returns lag per partition. Partitions never read are absent.
 func (t *lagTracker) Snapshot() map[int32]int64 {
 	t.mu.Lock()

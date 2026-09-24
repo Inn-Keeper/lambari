@@ -2,6 +2,8 @@ package engine
 
 import (
 	"fmt"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -189,5 +191,78 @@ func TestVelocityWindowIsCappedButStillSaturates(t *testing.T) {
 	}
 	if last := sh.seen["ip"][maxWindowEvents-1]; last != 1_999 {
 		t.Fatalf("newest kept timestamp = %d, want 1999 (oldest must be dropped)", last)
+	}
+}
+
+// One card's transactions must be scored in submission order, or the
+// card_velocity_extreme flag (the 8th hit in 60s) can land on an earlier,
+// possibly legitimate, transaction.
+func TestOneCardIsScoredInSubmissionOrder(t *testing.T) {
+	e := New()
+	var mu sync.Mutex
+	var extreme []string
+	e.OnFlagged(func(v model.Verdict) {
+		for _, f := range v.Flags {
+			if f == "card_velocity_extreme" {
+				mu.Lock()
+				extreme = append(extreme, v.TxID)
+				mu.Unlock()
+			}
+		}
+	})
+	e.Start()
+	defer e.Stop()
+
+	start := time.Now()
+	txs := make([]model.Transaction, 8)
+	for i := range txs {
+		txs[i] = benignTx(i)
+		txs[i].CardHash = "tok_hot"
+		txs[i].Timestamp = start.Add(time.Duration(i) * time.Millisecond)
+	}
+	e.SubmitBatch(txs)
+
+	if len(extreme) != 1 || extreme[0] != "tx_7" {
+		t.Fatalf("card_velocity_extreme on %v, want only the 8th (tx_7)", extreme)
+	}
+}
+
+// Late events must not displace newer history. The review's reproduction:
+// 30 current events, 30 valid ones from six minutes ago, then one more
+// current event, which must still see the active window.
+func TestLateEventsDoNotEraseActiveWindow(t *testing.T) {
+	sh := &shard{seen: map[string][]int64{}}
+	const window = 300_000 // IP window, 5 min
+	now := int64(10_000_000)
+	for i := int64(0); i < 30; i++ {
+		sh.touch("ip", now+i, window)
+	}
+	for i := int64(0); i < 30; i++ {
+		if n := sh.touch("ip", now-6*60_000+i, window); n != 1 {
+			t.Fatalf("event older than the window counted %d, want 1 (scored alone)", n)
+		}
+	}
+	if n := sh.touch("ip", now+30, window); n < 30 {
+		t.Fatalf("current event counted %d after late events, want ≥30 (ip_fanout_extreme)", n)
+	}
+}
+
+// Arrival order must not change a count: in-window events that arrive late
+// are inserted by timestamp, and each event counts what precedes it in time.
+func TestOutOfOrderEventsAreCountedByTimestamp(t *testing.T) {
+	sh := &shard{seen: map[string][]int64{}}
+	const window = 60_000
+	for _, ts := range []int64{5_000, 1_000, 3_000, 2_000, 4_000} {
+		sh.touch("card", ts, window)
+	}
+	if got := sh.seen["card"]; !slices.IsSorted(got) || len(got) != 5 {
+		t.Fatalf("window = %v, want 5 timestamps in order", got)
+	}
+	if n := sh.touch("card", 6_000, window); n != 6 {
+		t.Fatalf("count = %d, want 6", n)
+	}
+	// A late event counts only what came before it in time: 1000..2500.
+	if n := sh.touch("card", 2_500, window); n != 3 {
+		t.Fatalf("late event counted %d, want 3", n)
 	}
 }

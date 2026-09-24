@@ -14,7 +14,7 @@ run-web:          ## start the dashboard dev server on :5173
 	pnpm dev
 
 sim:              ## start the built-in simulator at 5000 tx/s
-	curl -s -X POST localhost:8080/api/simulate -d '{"rate":5000}'
+	curl -s -X POST localhost:8080/api/simulate -H 'Content-Type: application/json' -d '{"rate":5000}'
 
 test:             ## run backend tests
 	cd backend && go test ./...

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"mime"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -53,9 +54,24 @@ func NewServer(eng *engine.Engine, store cases.Store, mode string) *Server {
 }
 
 // Handler serves same-origin only: the dashboard reaches the API through the
-// Vite proxy, so no CORS headers. Allowing "*" would let any site open in an
-// analyst's browser resolve cases or start the simulator.
-func (s *Server) Handler() http.Handler { return s.mux }
+// Vite proxy, so there are no CORS headers. Omitting them stops other sites
+// reading responses, not sending writes, so requireJSON guards the writes.
+func (s *Server) Handler() http.Handler { return requireJSON(s.mux) }
+
+// requireJSON rejects POSTs that aren't application/json. A browser sends a
+// cross-origin JSON POST only after a CORS preflight, which fails here; the
+// forms and text/plain requests it sends without one get 415.
+func requireJSON(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
+				http.Error(w, `{"error":"Content-Type must be application/json"}`, http.StatusUnsupportedMediaType)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "mode": s.mode})

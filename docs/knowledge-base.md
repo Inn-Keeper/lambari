@@ -48,7 +48,7 @@ Five frontend runtime dependencies. Every addition needs to pay rent.
  (topic:            │   (group: lambari-scoring)│                 │
   transactions)     │                            ▼                 │
                     │   ┌────────────────────────────────┐         │
-                    │   │ Engine: chan (16,384 buffer)   │         │
+                    │   │ Engine: 16,384 slots, per card │         │
                     │   │  → 2×NumCPU workers            │         │
                     │   │  → rules: amount · velocity ·  │         │
                     │   │     ip fan-out · geo · MCC     │         │
@@ -79,8 +79,9 @@ Five frontend runtime dependencies. Every addition needs to pay rent.
    top open cases) and uses REST only to resolve cases.
 
 ### Engine internals — the four load-bearing decisions
-- **Worker pool, not per-request goroutines.** Bounded channel (16,384) in
-  front of `2 × NumCPU` workers. `Submit` blocks when full — backpressure
+- **Worker pool, not per-request goroutines.** `2 × NumCPU` workers, each with
+  its own queue (16,384 slots in total), and each card always on the same one
+  so it is scored in order. `Submit` blocks when full — backpressure
   propagates upstream instead of OOMing. In Kafka mode this surfaces as
   consumer lag, which is visible and alertable.
 - **Sharded velocity state.** Sliding-window counters in 256 mutex shards

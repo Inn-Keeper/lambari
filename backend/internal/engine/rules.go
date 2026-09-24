@@ -2,6 +2,8 @@ package engine
 
 import (
 	"hash/fnv"
+	"slices"
+	"sort"
 	"sync"
 	"time"
 
@@ -49,26 +51,39 @@ func shardFor(key string) uint32 {
 // of them. Raise it if a rule ever needs a higher threshold.
 const maxWindowEvents = 30
 
-// touch records an event for key and returns how many events landed inside
-// the window, saturating at maxWindowEvents.
-func (sh *shard) touch(key string, now int64, windowMS int64) int {
+// touch records an event at ts for key and returns how many events fall in
+// the window ending at ts, itself included, saturating at maxWindowEvents.
+//
+// Events can arrive out of timestamp order: per-card queues order only one
+// card, and many cards update the same IP window concurrently. So the window is
+// kept sorted by timestamp, entries expire relative to the newest timestamp
+// seen for the key, and the cap drops the oldest timestamps. A late event is
+// inserted at its place and can never push newer history out. An event older
+// than the whole window is scored alone and leaves the window unchanged.
+func (sh *shard) touch(key string, ts int64, windowMS int64) int {
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	events := sh.seen[key]
-	cutoff := now - windowMS
-	// drop expired entries in place
-	kept := events[:0]
-	for _, t := range events {
-		if t >= cutoff {
-			kept = append(kept, t)
-		}
+	events := sh.seen[key] // sorted ascending
+	newest := ts
+	if n := len(events); n > 0 && events[n-1] > newest {
+		newest = events[n-1]
 	}
-	kept = append(kept, now)
-	if n := len(kept); n > maxWindowEvents {
-		kept = kept[:copy(kept, kept[n-maxWindowEvents:])] // drop the oldest
+	events = events[sort.Search(len(events), func(i int) bool { return events[i] >= newest-windowMS }):]
+	if ts < newest-windowMS {
+		sh.seen[key] = events
+		return 1
 	}
-	sh.seen[key] = kept
-	return len(kept)
+
+	at := sort.Search(len(events), func(i int) bool { return events[i] > ts })
+	events = slices.Insert(events, at, ts) // an append when in order
+	if n := len(events); n > maxWindowEvents {
+		events = events[:copy(events, events[n-maxWindowEvents:])] // keep the newest
+	}
+	sh.seen[key] = events
+
+	from := sort.Search(len(events), func(i int) bool { return events[i] >= ts-windowMS })
+	to := sort.Search(len(events), func(i int) bool { return events[i] > ts })
+	return max(to-from, 1) // ts itself may have been capped away if it is the oldest
 }
 
 // ---- rules ---------------------------------------------------------------

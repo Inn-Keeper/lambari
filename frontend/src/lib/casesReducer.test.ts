@@ -95,4 +95,17 @@ describe("casesReducer", () => {
     s = casesReducer(s, { type: "loaded", cases: [mk("a"), mk("b")] });
     expect(s.cases.map((c) => c.id)).toEqual(["b"]);
   });
+
+  it.each(["resolveOk", "resolveGone"] as const)(
+    "a resolved case stays gone after resume (%s)",
+    (outcome) => {
+      let s = loaded(["a", "b"]);
+      s = casesReducer(s, { type: "pause" });
+      s = casesReducer(s, { type: "loaded", cases: [mk("a"), mk("b")] }); // snapshot still lists a
+      s = casesReducer(s, { type: "resolveStart", id: "a" });
+      s = casesReducer(s, { type: outcome });
+      s = casesReducer(s, { type: "resume" });
+      expect(s.cases.map((c) => c.id)).toEqual(["b"]);
+    },
+  );
 });

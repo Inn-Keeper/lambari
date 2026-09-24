@@ -7,6 +7,7 @@ package kafka
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -70,6 +71,7 @@ func NewConsumer(brokers []string, eng *engine.Engine, dlq *DLQProducer, verdict
 		// Last chance before partitions move to another member (and on Close).
 		// Thanks to BlockRebalanceOnPoll it runs between batches, never inside one.
 		kgo.OnPartitionsRevoked(func(ctx context.Context, cl *kgo.Client, revoked map[string][]int32) {
+			c.lag.Forget(revoked[Topic])
 			if err := c.flush(ctx); err != nil {
 				slog.Error("flush on partition revoke — skipping commit, records will replay", "err", err)
 				return
@@ -77,6 +79,10 @@ func NewConsumer(brokers []string, eng *engine.Engine, dlq *DLQProducer, verdict
 			if err := cl.CommitUncommittedOffsets(ctx); err != nil {
 				slog.Error("commit on partition revoke", "revoked", revoked, "err", err)
 			}
+		}),
+		// Lost (a fatal group error) can't commit, but the lag still moves on.
+		kgo.OnPartitionsLost(func(_ context.Context, _ *kgo.Client, lost map[string][]int32) {
+			c.lag.Forget(lost[Topic])
 		}),
 	)
 	if err != nil {
@@ -94,33 +100,37 @@ func NewConsumer(brokers []string, eng *engine.Engine, dlq *DLQProducer, verdict
 func (c *Consumer) Run(ctx context.Context) error {
 	defer c.client.Close()
 	for {
-		fetches := c.client.PollFetches(ctx)
-		if ctx.Err() != nil {
-			c.client.AllowRebalance()
-			return nil
-		}
-		err := c.handleFetches(ctx, fetches)
+		// Whatever a poll returned is scored before anything else, even during
+		// shutdown: franz-go already counts it as polled, so the next commit
+		// (or the revoke hook on Close) would otherwise commit past it.
+		err := c.handleFetches(ctx, c.client.PollFetches(ctx))
 		// Every poll must be paired with this (BlockRebalanceOnPoll); by now
 		// the batch is committed or deliberately left uncommitted.
 		c.client.AllowRebalance()
 		if err != nil {
 			return err
 		}
+		if ctx.Err() != nil {
+			return nil
+		}
 	}
 }
 
 func (c *Consumer) handleFetches(ctx context.Context, fetches kgo.Fetches) error {
-	if errs := fetches.Errors(); len(errs) > 0 {
-		for _, e := range errs {
-			slog.Error("kafka fetch", "topic", e.Topic, "err", e.Err)
+	// A partition error doesn't void the records other partitions returned.
+	errs := fetches.Errors()
+	for _, e := range errs {
+		if !errors.Is(e.Err, context.Canceled) && !errors.Is(e.Err, kgo.ErrClientClosed) {
+			slog.Error("kafka fetch", "topic", e.Topic, "partition", e.Partition, "err", e.Err)
 		}
-		time.Sleep(time.Second)
-		return nil
 	}
 
 	// The high watermark rides along on every fetch, so lag costs nothing
 	// beyond reading it.
 	fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+		if p.Err != nil {
+			return
+		}
 		last := int64(-1)
 		if n := len(p.Records); n > 0 {
 			last = p.Records[n-1].Offset
@@ -130,6 +140,12 @@ func (c *Consumer) handleFetches(ctx context.Context, fetches kgo.Fetches) error
 
 	recs := make([]*kgo.Record, 0, fetches.NumRecords())
 	fetches.EachRecord(func(rec *kgo.Record) { recs = append(recs, rec) })
+	if len(recs) == 0 {
+		if len(errs) > 0 && ctx.Err() == nil {
+			time.Sleep(time.Second) // back off a failing broker
+		}
+		return nil
+	}
 	return c.processBatch(ctx, recs)
 }
 

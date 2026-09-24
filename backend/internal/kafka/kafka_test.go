@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -117,5 +118,74 @@ func TestInvalidRecordGoesToDLQ(t *testing.T) {
 	}
 	if got := eng.Snapshot().Processed; got != 0 {
 		t.Fatalf("scored %d invalid records, want 0", got)
+	}
+}
+
+func goodRecord(t *testing.T, partition int32, offset int64) *kgo.Record {
+	t.Helper()
+	b, err := json.Marshal(model.Transaction{ID: fmt.Sprintf("tx_%d_%d", partition, offset), CardHash: "tok_1", Timestamp: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &kgo.Record{Topic: Topic, Partition: partition, Offset: offset, Value: b}
+}
+
+// franz-go counts fetched records as polled whether or not they were
+// processed, so dropping them would let the next commit skip them for good.
+func TestPartitionErrorDoesNotDropOtherPartitionsRecords(t *testing.T) {
+	eng := engine.New()
+	eng.Start()
+	defer eng.Stop()
+
+	committed := false
+	c := &Consumer{
+		eng:    eng,
+		flush:  func(context.Context) error { return nil },
+		commit: func(context.Context) error { committed = true; return nil },
+	}
+	fetches := kgo.Fetches{{Topics: []kgo.FetchTopic{{Topic: Topic, Partitions: []kgo.FetchPartition{
+		{Partition: 0, Err: errors.New("leader not available")},
+		{Partition: 1, HighWatermark: 1, Records: []*kgo.Record{goodRecord(t, 1, 0)}},
+	}}}}}
+
+	if err := c.handleFetches(context.Background(), fetches); err != nil {
+		t.Fatal(err)
+	}
+	if got := eng.Snapshot().Processed; got != 1 {
+		t.Fatalf("scored %d records, want the 1 from the healthy partition", got)
+	}
+	if !committed {
+		t.Fatal("scored batch was not committed")
+	}
+}
+
+// On shutdown the last poll's records are still scored, but not committed
+// here: the flush can't complete on a cancelled context, and the revoke hook
+// on Close commits them once their verdicts are out.
+func TestShutdownScoresFetchedRecordsWithoutCommitting(t *testing.T) {
+	eng := engine.New()
+	eng.Start()
+	defer eng.Stop()
+
+	committed := false
+	c := &Consumer{
+		eng:    eng,
+		flush:  func(ctx context.Context) error { return ctx.Err() },
+		commit: func(context.Context) error { committed = true; return nil },
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	fetches := kgo.Fetches{{Topics: []kgo.FetchTopic{{Topic: Topic, Partitions: []kgo.FetchPartition{
+		{Partition: 0, HighWatermark: 1, Records: []*kgo.Record{goodRecord(t, 0, 0)}},
+	}}}}}
+
+	if err := c.handleFetches(ctx, fetches); err != nil {
+		t.Fatal(err)
+	}
+	if got := eng.Snapshot().Processed; got != 1 {
+		t.Fatalf("scored %d records on shutdown, want 1", got)
+	}
+	if committed {
+		t.Fatal("committed during shutdown before the flush completed")
 	}
 }

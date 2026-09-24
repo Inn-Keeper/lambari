@@ -531,11 +531,11 @@
 
     <div class="scaleline">
       <div>
-        <span class="n">1.2M/s</span>
+        <span class="n">1–2M/s</span>
         <span class="k">Engine bench, in-process</span>
       </div>
       <div>
-        <span class="n">72M/min</span>
+        <span class="n">60–120M/min</span>
         <span class="k">Same number, in requests/min</span>
       </div>
       <div>
@@ -612,7 +612,7 @@
           <div class="updown" aria-hidden="true">↕</div>
           <div class="node">
             <span class="t">Engine</span>
-            <span class="d">Worker pool (2×CPU) behind a 16,384-slot bounded channel; sliding windows over 256 FNV mutex shards; five additive rules; ~1.2–1.5M/s in-process.</span>
+            <span class="d">Worker pool (2×CPU), one queue per worker with each card pinned to one (16,384 slots in total); sliding windows over 256 FNV mutex shards; five additive rules; ~1.0–2.4M/s in-process.</span>
           </div>
         </div>
 
@@ -935,7 +935,7 @@
           <tr>
             <td>Worker-pool engine</td>
             <td><span class="state have">Built</span></td>
-            <td>Bounded channel, 2×NumCPU workers, 256 FNV mutex shards, atomics on the read path.</td>
+            <td>2×NumCPU workers with a queue each, cards pinned to one worker for ordered scoring, 256 FNV mutex shards, atomics on the read path.</td>
           </tr>
           <tr>
             <td>Rule chain</td>

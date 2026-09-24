@@ -65,8 +65,9 @@ and scoring latency. `model.Verdict`.
 of buffering without limit. Here: a full engine blocks the Kafka consumer, or
 makes HTTP ingest answer 503.
 
-**Bounded channel / buffer** — The 16,384-slot queue in front of the workers.
-Full means backpressure. `bufferSize` in `engine.go`.
+**Bounded channel / buffer** — The queues in front of the workers, one per
+worker, 16,384 slots in total. A full queue means backpressure. `bufferSize` in
+`engine.go`.
 
 **Ring buffer** — The last 64 interesting verdicts, kept for the live feed.
 Overwrites the oldest entry. `Engine.Recent`.
@@ -76,13 +77,16 @@ workers rarely wait on each other. Chosen by an **FNV** hash of the key, a fast
 hash that isn't meant to be secure.
 
 **Sliding window** — The timestamps a key was seen at within the last N
-seconds. Capped at 30 per key, the largest rule threshold. `shard.touch`.
+seconds, kept sorted by timestamp and capped at the newest 30. An event counts
+what falls in the window ending at its own time; one older than the whole
+window is scored alone. `shard.touch`.
 
 **Sweeper** — A background task that deletes keys idle for 10 minutes, every 2
 minutes. `State.StartSweeper`.
 
-**Worker pool** — A fixed set of goroutines (2 × CPU count) that score from the
-buffer, instead of one goroutine per request.
+**Worker pool** — A fixed set of goroutines (2 × CPU count) that score from
+their queues, instead of one goroutine per request. A card always goes to the
+same worker, so its transactions are scored in order.
 
 ## Kafka and delivery
 
@@ -148,6 +152,9 @@ and flushes and commits.
 a batch and rejects the rest. The caller resends from N.
 
 **Ingest** — `POST /api/transactions`: batches of transactions over HTTP.
+
+**415** — The answer to a POST that isn't `Content-Type: application/json`.
+Stops other websites from sending writes without a CORS preflight.
 
 **Load generator** — `cmd/loadgen`: sends synthetic traffic over HTTP or
 Kafka and reports the rate the server actually kept.

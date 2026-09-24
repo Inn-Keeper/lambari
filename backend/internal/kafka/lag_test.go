@@ -54,3 +54,18 @@ func TestSnapshotIsACopy(t *testing.T) {
 		t.Fatalf("mutating a snapshot changed the tracker: got %d, want 10", got)
 	}
 }
+
+func TestForgetDropsPartitionsNoLongerOwned(t *testing.T) {
+	var lt lagTracker
+	lt.Observe(0, 100, 49)
+	lt.Observe(1, 100, 89)
+	lt.Forget([]int32{0})
+
+	got := lt.Snapshot()
+	if _, ok := got[0]; ok {
+		t.Errorf("revoked partition 0 still reported: %v", got)
+	}
+	if got[1] != 10 {
+		t.Errorf("partition 1 lag = %d, want 10", got[1])
+	}
+}
