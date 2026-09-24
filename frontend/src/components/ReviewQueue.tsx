@@ -1,36 +1,22 @@
 import { useEffect, useReducer } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { fetchCases, HttpError, resolveCase, type Resolution } from "../lib/api";
+import { HttpError, resolveCase, type Case, type Resolution } from "../lib/api";
 import { casesReducer, initialQueueState } from "../lib/casesReducer";
 import type { CaseCounts } from "../lib/useStream";
-
-const VISIBLE = 8;
 
 /**
  * The analyst's half of the pipeline: flagged transactions land here as
  * cases, sorted worst-score-first. Each resolution is stored as a label —
  * the raw material for a future ML rule.
  */
-export function ReviewQueue({ counts, tick }: { counts: CaseCounts; tick: number }) {
+export function ReviewQueue({ counts, queue }: { counts: CaseCounts; queue: Case[] }) {
   const [state, dispatch] = useReducer(casesReducer, initialQueueState);
 
-  // Push-driven: `tick` (the stream's monotonic processed counter) bumps
-  // once per SSE frame, so the queue refetches exactly when the engine
-  // reports fresh work and goes quiet when the stream is down. Counts alone
-  // are not enough — pinned at the eviction cap they stop changing while
-  // the queue's contents keep churning. AbortController keeps a stale
-  // response from clobbering a newer one.
+  // Push-driven: every SSE frame carries the top of the queue, so there is
+  // nothing to poll. Each frame is a new array, which re-runs this.
   useEffect(() => {
-    const ctl = new AbortController();
-    fetchCases(ctl.signal)
-      .then((cases) => dispatch({ type: "loaded", cases: cases.slice(0, VISIBLE) }))
-      .catch((err) => {
-        if (ctl.signal.aborted) return;
-        console.error("case refresh failed", err);
-        dispatch({ type: "loadFailed" });
-      });
-    return () => ctl.abort();
-  }, [tick]);
+    dispatch({ type: "loaded", cases: queue });
+  }, [queue]);
 
   const resolve = async (id: string, resolution: Resolution) => {
     dispatch({ type: "resolveStart", id });
@@ -49,8 +35,8 @@ export function ReviewQueue({ counts, tick }: { counts: CaseCounts; tick: number
     }
   };
 
-  // While the analyst's pointer is over the queue, the list holds still —
-  // rows must not yank away under a cursor that is aiming at a button.
+  // While the analyst's pointer or keyboard focus is in the queue, the list
+  // holds still — rows must not yank away under a cursor or a focused button.
   const freshCount = state.deferred
     ? state.deferred.filter((d) => !state.cases.some((c) => c.id === d.id)).length
     : 0;
@@ -59,7 +45,14 @@ export function ReviewQueue({ counts, tick }: { counts: CaseCounts; tick: number
     <div
       className="rounded-lg border border-line bg-panel p-4"
       onMouseEnter={() => dispatch({ type: "pause" })}
-      onMouseLeave={() => dispatch({ type: "resume" })}
+      onMouseLeave={(e) => {
+        if (!e.currentTarget.contains(document.activeElement)) dispatch({ type: "resume" });
+      }}
+      onFocus={() => dispatch({ type: "pause" })}
+      onBlur={(e) => {
+        // resume only when focus leaves the queue, not when it moves between buttons
+        if (!e.currentTarget.contains(e.relatedTarget)) dispatch({ type: "resume" });
+      }}
     >
       <div className="flex items-baseline justify-between gap-3">
         <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">

@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"time"
 )
@@ -17,10 +18,10 @@ type Generator struct {
 }
 
 var (
-	bins      = []string{"411111", "455673", "510510", "520082", "530127", "601100", "356600", "627780", "506699"}
-	countries = map[string]string{"411111": "US", "455673": "GB", "510510": "DE", "520082": "SE", "530127": "SE", "601100": "US", "356600": "JP", "627780": "BR", "506699": "NG"}
-	mccs      = []string{"5411", "5812", "5732", "4111", "5999", "7995", "6051", "4829"}
-	geos      = []string{"SE", "US", "GB", "DE", "JP", "BR", "NG", "RU", "VN"}
+	bins         = []string{"411111", "455673", "510510", "520082", "530127", "601100", "356600", "627780", "506699"}
+	lowRiskMCCs  = []string{"5411", "5812", "5732", "4111", "5999"}
+	highRiskMCCs = []string{"7995", "6051", "4829"} // gambling, crypto, wire transfer
+	geos         = []string{"SE", "US", "GB", "DE", "JP", "BR", "NG", "RU", "VN"}
 )
 
 func NewGenerator(seed int64) *Generator {
@@ -44,10 +45,10 @@ func (g *Generator) Next() Transaction {
 		CardHash:   fmt.Sprintf("tok_%08x", g.rng.Uint32()),
 		Amount:     roundCents(20 + g.rng.ExpFloat64()*120),
 		Currency:   "SEK",
-		Country:    countries[bin], // benign default: card used at home
+		Country:    BINCountry[bin], // benign default: card used at home
 		IP:         randomIP(g.rng),
 		MerchantID: fmt.Sprintf("m_%03d", g.rng.Intn(400)),
-		MCC:        mccs[g.rng.Intn(5)], // low-risk categories
+		MCC:        lowRiskMCCs[g.rng.Intn(len(lowRiskMCCs))],
 		Timestamp:  time.Now(),
 	}
 
@@ -61,7 +62,7 @@ func (g *Generator) Next() Transaction {
 		tx.Country = geos[g.rng.Intn(len(geos))]
 		tx.Amount = roundCents(400 + g.rng.ExpFloat64()*900)
 	case r < 0.10: // high-risk merchant + big ticket
-		tx.MCC = mccs[5+g.rng.Intn(3)]
+		tx.MCC = highRiskMCCs[g.rng.Intn(len(highRiskMCCs))]
 		tx.Amount = roundCents(1200 + g.rng.ExpFloat64()*2500)
 	}
 	return tx
@@ -72,5 +73,5 @@ func randomIP(rng *rand.Rand) string {
 }
 
 func roundCents(v float64) float64 {
-	return float64(int(v*100)) / 100
+	return math.Round(v*100) / 100
 }

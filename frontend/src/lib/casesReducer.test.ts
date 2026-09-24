@@ -24,8 +24,7 @@ const loaded = (ids: string[]) =>
 
 describe("casesReducer", () => {
   it("loaded replaces cases and clears error", () => {
-    const errored = casesReducer(initialQueueState, { type: "loadFailed" });
-    expect(errored.error).toMatch(/refresh/);
+    const errored = { ...initialQueueState, error: "Couldn't resolve tx_1 — try again" };
     const s = casesReducer(errored, { type: "loaded", cases: [mk("a")] });
     expect(s.cases.map((c) => c.id)).toEqual(["a"]);
     expect(s.error).toBeNull();

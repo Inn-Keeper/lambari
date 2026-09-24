@@ -32,14 +32,8 @@ const post = (url: string, body: unknown, what: string) =>
     body: JSON.stringify(body),
   }).then((res) => void ensureOk(res, what));
 
-export async function fetchCases(signal?: AbortSignal): Promise<Case[]> {
-  const res = ensureOk(await fetch("/api/cases", { signal }), "load cases");
-  const data = (await res.json()) as { cases: Case[] | null };
-  return data.cases ?? [];
-}
-
 export const resolveCase = (id: string, resolution: Resolution): Promise<void> =>
-  post(`/api/cases/${id}/resolve`, { resolution }, `resolve ${id}`);
+  post(`/api/cases/${encodeURIComponent(id)}/resolve`, { resolution }, `resolve ${id}`);
 
 export const setSimulation = (rate: number): Promise<void> =>
   post("/api/simulate", { rate }, "set simulation");

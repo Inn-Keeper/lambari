@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // Transaction is a single payment event entering the pipeline.
 type Transaction struct {
@@ -14,6 +17,36 @@ type Transaction struct {
 	MerchantID string    `json:"merchant_id"`
 	MCC        string    `json:"mcc"` // merchant category code
 	Timestamp  time.Time `json:"timestamp"`
+}
+
+// BINCountry maps a card BIN to its issuing country. A toy table for the PoC;
+// production would use a licensed BIN database.
+var BINCountry = map[string]string{
+	"411111": "US", "455673": "GB", "510510": "DE",
+	"520082": "SE", "530127": "SE", "601100": "US",
+	"356600": "JP", "627780": "BR", "506699": "NG",
+}
+
+// MaxClockSkew is how far into the future a timestamp may be. The velocity
+// windows use the transaction's own time as "now", so one far-future
+// timestamp would expire every real entry in that card's window.
+const MaxClockSkew = 5 * time.Second
+
+// Validate rejects transactions the rules cannot score safely: without an ID
+// a verdict can't be traced or deduped, and without a card hash every such
+// transaction would share one velocity window.
+func (tx Transaction) Validate(now time.Time) error {
+	switch {
+	case tx.ID == "":
+		return errors.New("id is required")
+	case tx.CardHash == "":
+		return errors.New("card_hash is required")
+	case tx.Timestamp.IsZero():
+		return errors.New("timestamp is required")
+	case tx.Timestamp.After(now.Add(MaxClockSkew)):
+		return errors.New("timestamp is in the future")
+	}
+	return nil
 }
 
 // Decision is the engine's ruling on a transaction.

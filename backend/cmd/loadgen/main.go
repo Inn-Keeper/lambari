@@ -4,14 +4,8 @@
 //	go run ./cmd/loadgen -rate 5000 -duration 30s                  # HTTP batches
 //	go run ./cmd/loadgen -rate 5000 -kafka localhost:19092         # Kafka produce
 //
-// To find a ceiling rather than hold a rate, go unthrottled and add senders
-// until throughput stops rising:
-//
-//	go run ./cmd/loadgen -rate 0 -workers 8 -kafka localhost:19092
-//
-// Every run reports the rate it actually achieved, not the one it was asked
-// for. A generator that silently falls behind its own target is worse than no
-// measurement at all, because it looks like a measurement.
+// -rate 0 runs unthrottled, for finding a ceiling. Every run reports the rate
+// it actually achieved, not the one it was asked for.
 package main
 
 import (
@@ -138,11 +132,8 @@ func main() {
 	report(time.Since(start), *rate, sent.Load(), failed.Load(), rejected.Load(), asyncFailures)
 }
 
-// httpSender posts a batch and reports how much of it the server shed.
-//
-// A 503 here is not a failure: ingest sheds load when the engine's buffer is
-// full and says how much in the body. Treating it as a dead request would
-// under-report throughput as badly as ignoring it over-reports it.
+// httpSender posts a batch and reports how much of it the server shed. A 503
+// is partial acceptance, not a failure: the body says how much was kept.
 func httpSender(client *http.Client, url string) func([]model.Transaction) (int, error) {
 	return func(batch []model.Transaction) (int, error) {
 		b, err := json.Marshal(batch)

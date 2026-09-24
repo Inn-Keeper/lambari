@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: gofmt
+        working-directory: backend
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+        working-directory: backend
+      - run: go test -race -count=1 ./...
+        working-directory: backend
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # version comes from packageManager in package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter lambari-dashboard test
+      - run: pnpm build # tsc -b, then vite build
+
+  # The delivery guarantees are only proven against a real broker.
+  kafka:
+    runs-on: ubuntu-latest
+    needs: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      # Started with docker run rather than as a service container: services
+      # can't override the image's command, and Redpanda needs these flags.
+      - name: Start Redpanda
+        run: |
+          docker run -d --name redpanda -p 19092:19092 redpandadata/redpanda:v24.2.7 \
+            redpanda start --smp 1 --overprovisioned --mode dev-container \
+            --kafka-addr external://0.0.0.0:19092 --advertise-kafka-addr external://localhost:19092
+          for i in $(seq 1 30); do
+            docker exec redpanda rpk cluster health | grep -q 'Healthy:.*true' && exit 0
+            sleep 2
+          done
+          docker logs redpanda
+          exit 1
+      - run: make e2e
+      - run: make rebalance

@@ -9,8 +9,9 @@ over SSE.
 deployment. Every figure is what the server *kept*; shed load is counted
 separately and never folded into the rate.
 
-- **~710,000–790,000 tx/s** scoring throughput with no IO (`make bench`, 1,271
-  ns/op on the latest run), p99 scoring latency in the **≤50µs** bucket. It moves
+- **~1.2–1.5M tx/s** scoring throughput with no IO (`make bench`, 677–817
+  ns/op), up from ~620–760k once each velocity window was capped at 30
+  timestamps (measured back to back on the same machine). p99 scoring latency in the **≤50µs** bucket. It moves
   run to run with thermal state and what else is on the machine, so it is a range
   rather than a figure. This is the engine in isolation — the ceiling the rest of
   the pipeline is measured against, not a system throughput number.
@@ -55,77 +56,81 @@ error if the server refuses.
 | Primitives | Radix UI (Slider, Switch) | Accessible simulator controls |
 | Live updates | Server-Sent Events | One-directional stats push — simpler than WebSocket, auto-reconnects |
 
-## Prerequisites
+## Run it locally
 
-- Go 1.22+
-- Node 22 + pnpm (`corepack enable` picks up the pinned version)
-- Docker, for Kafka mode only. `make kafka-up` additionally needs the **Compose
-  v2 plugin**; if `docker compose version` fails (colima, for one, ships
-  without it), start the broker directly instead — see below. The experiments
-  themselves never touch Compose.
+### 1. Prerequisites
 
-## Quickstart (no Kafka needed)
+| Tool | Needed for | Install (macOS) |
+|---|---|---|
+| Go 1.22+ | backend | `brew install go` |
+| Node 22 + pnpm | dashboard | `brew install node && corepack enable` |
+| Docker engine | Kafka mode only | `brew install colima docker` |
+
+Any Docker engine works. [Colima](https://github.com/abiosoft/colima) is a free,
+CLI-only one: it runs Docker in a small Linux VM. It ships without the Compose
+plugin, so step 4 starts the broker with plain `docker run`.
+
+### 2. Install and run (no Kafka)
 
 ```bash
-make setup       # go mod tidy + pnpm install
-make run-api     # terminal 1 — engine + API on :8080
-make run-web     # terminal 2 — dashboard on :5173
+make setup       # Go modules + pnpm install
+make run-api     # terminal 1: engine + API on :8080
+make run-web     # terminal 2: dashboard on :5173
 ```
 
-To compile standalone binaries instead of `go run`:
+`make build` compiles `backend/api` and `backend/loadgen` if you'd rather run
+binaries than `go run`.
+
+Open http://localhost:5173, turn on **Simulator**, and set a rate. The
+generator mixes in ~8–10% fraud patterns: card-testing rings, velocity
+attacks, stolen cards used abroad, high-risk merchants.
+
+### 3. Check it
 
 ```bash
-make build       # → backend/api, backend/loadgen
-./backend/api
-```
-
-Open http://localhost:5173, flip the **Simulator** switch, drag the rate
-slider. The built-in generator produces realistic traffic with ~8–10%
-embedded fraud patterns (card-testing rings, velocity attacks, stolen-card
-geo mismatches, high-risk merchants).
-
-### External IO load (the PoC path)
-
-```bash
-make loadgen     # POSTs 5000 tx/s in JSON batches to /api/transactions for 30s
-make bench       # raw engine throughput benchmark
 make test        # Go tests
-make test-web    # React tests (vitest + Testing Library)
+make test-web    # dashboard tests
+make bench       # engine throughput, no IO
+make loadgen     # POST 5000 tx/s to /api/transactions for 30s (API must be running)
 ```
 
-To find a ceiling rather than hold a rate, run the generator unthrottled and
-add senders until throughput stops rising:
+To find a ceiling instead of holding a rate, run the generator unthrottled and
+add senders until throughput stops rising. Restart the API between runs, since
+state left by one run slows the next:
 
 ```bash
-go run ./cmd/loadgen -rate 0 -workers 8 -batch 500 -duration 30s
+cd backend && go run ./cmd/loadgen -rate 0 -workers 8 -batch 500 -duration 30s
 ```
 
-Every run reports the rate it *achieved*, plus anything the server shed —
-a paced generator can never report more than you asked it for, and a 200
-response that quietly dropped half the batch is not throughput. Restart the
-API between configurations: state accumulated by one run handicaps the next.
-[Where that ends up](#throughput-ceiling-measured) is measured below.
+Each run reports the rate the server kept and what it shed.
+[Measured results](#throughput-ceiling-measured) are below.
 
-## Kafka mode
+### 4. Kafka mode
 
 ```bash
-make kafka-up        # Redpanda on :19092, console UI on :8081
-make kafka-run       # API consumes from the `transactions` topic
-make kafka-loadgen   # produce 5000 tx/s into the topic
-make e2e             # crash-replay proof: every expected verdict reaches Kafka
-make rebalance       # state-loss proof: SIGTERM one of two consumers, count the
-                     #   velocity windows that vanish with the partitions
-```
-
-`make kafka-up` is Compose; the rest only need a broker on `localhost:19092`
-and check for one before doing anything. Without the Compose plugin, the same
-broker in one command (no console UI):
-
-```bash
+colima start                      # skip if another Docker engine is running
 docker run -d --name lambari-redpanda -p 19092:19092 redpandadata/redpanda:v24.2.7 \
   redpanda start --smp 1 --overprovisioned --mode dev-container \
   --kafka-addr external://0.0.0.0:19092 --advertise-kafka-addr external://localhost:19092
+
+make kafka-run       # terminal 1: API consuming the `transactions` topic
+make kafka-loadgen   # terminal 2: produce 5000 tx/s into it
+make e2e             # crash-replay proof (~50s): SIGKILL mid-batch, every verdict still arrives
+make rebalance       # state-loss proof (~6s): SIGTERM one of two consumers, count lost windows
 ```
+
+With the Compose plugin, `make kafka-up` replaces the `docker run` and adds the
+Redpanda Console on http://localhost:8081. Every other target only needs a
+broker on `localhost:19092` and says so if there isn't one.
+
+### 5. Stop
+
+```bash
+docker rm -f lambari-redpanda
+colima stop
+```
+
+## Kafka mode
 
 Records are keyed by card token so one card's events stay ordered within a
 partition — the velocity rules depend on that. Backpressure is natural:
@@ -151,10 +156,18 @@ answers — the last bullet is the one that matters.
 - The verdict and DLQ producers are flushed **before** every commit. They
   publish asynchronously, so committing first would let a crash discard
   buffered publishes the offsets already claimed were handled.
+- A flush only proves every publish *finished*, not that it *succeeded* — kgo
+  returns nil either way. The producers count failures themselves, and one
+  failure stops committing for good: the next commit would cover the failed
+  batch's offsets too. The consumer stops, the process exits non-zero, and the
+  restart replays from the last good commit.
 - Records that fail to decode go to `transactions.dlq` with origin headers
   rather than a log line, and don't block the rest of the batch.
-- `OnPartitionsRevoked` flushes and commits before a rebalance, bounding
-  redelivery to one in-flight batch.
+- Rebalances are blocked while a batch is in flight (`BlockRebalanceOnPoll`)
+  and allowed only after it is committed, so `OnPartitionsRevoked` runs between
+  batches, never inside one. It flushes and commits, bounding redelivery to one
+  in-flight batch. Publishes use a context shutdown doesn't cancel, so a SIGTERM
+  mid-batch can't fail verdicts that the revoke hook then commits past.
 - **Where duplicates actually land** — three different answers, none of them
   "idempotent":
   - *The case queue* suppresses a duplicate **while the case is still open**,
@@ -229,11 +242,12 @@ Mac mini M1, 8 cores, 16 GB — **client and server share those cores**, so the
 server-only ceiling is higher than anything below. Every run reports what the
 server *kept*; shed load is counted separately and never folded into the rate.
 
-Stage by stage, each HTTP run against a freshly started engine (15s, batch 500):
+Stage by stage, each HTTP run against a freshly started engine (15s, batch 500).
+These rows predate the 30-timestamp window cap and have not been re-run since:
 
 | Stage | Result |
 |---|---|
-| Engine alone, no IO (`make bench`) | **711,895 tx/s** |
+| Engine alone, no IO (`make bench`) | **711,895 tx/s** (before the window cap; ~1.2–1.5M after) |
 | HTTP ingest, 1 worker | 186,536 tx/s · 0% shed |
 | HTTP ingest, 2 workers | 308,510 tx/s · 0% shed |
 | HTTP ingest, 4 workers | 407,282 tx/s · 0.4% shed |
@@ -261,7 +275,7 @@ Three things that curve says:
 
 ### What actually limits it: state memory, not scoring CPU
 
-Scoring is not the wall — the engine alone does 712k tx/s. The wall is the
+Scoring is not the wall — the engine alone does over 1M tx/s. The wall is the
 velocity state. Each transaction touches a card key and an IP key, and the
 sweeper only evicts entries older than **10 minutes**, while the rules it
 serves look back 60s (card) and 5 min (IP). Nothing reads an entry older than
@@ -334,10 +348,10 @@ capacity when traffic is sustained.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/transactions` | Batch JSON ingest (the HTTP IO path). `503 + Retry-After` when saturated — see below |
+| `POST /api/transactions` | Batch JSON ingest (the HTTP IO path), max 8 MiB. `400` with the offending `index` if any transaction lacks `id`/`card_hash` or is dated more than 5s ahead; nothing in that batch is scored. `503 + Retry-After` when saturated — see below |
 | `POST /api/simulate` | `{"rate": 5000}` starts the built-in generator, `0` stops |
 | `GET /api/stats` | Engine snapshot |
-| `GET /api/stream` | SSE: stats + recent verdicts + case counts every 400ms |
+| `GET /api/stream` | SSE: stats + recent verdicts + case counts + top 8 open cases every 400ms |
 | `GET /api/cases` | Review queue (`?status=resolved` for labeled history) |
 | `POST /api/cases/{id}/resolve` | `{"resolution":"confirmed_fraud"\|"false_positive"}` |
 | `GET /metrics` | Prometheus scrape (root-level by convention, not under `/api`) |
@@ -407,12 +421,10 @@ model training.
 - [docs/interview-kafka-at-least-once.md](docs/interview-kafka-at-least-once.md)
   — why at-least-once over the alternatives, where the crash windows are, and
   what the e2e test actually proves
-- [docs/knowledge-base.md](docs/knowledge-base.md) — full architecture,
-  scoring model, decision record, verified performance, roadmap
+- [docs/knowledge-base.md](docs/knowledge-base.md) — problem framing, stack
+  decision record, scoring model, design system, runbook
 - [docs/diagrams.md](docs/diagrams.md) — UML: component, sequence, class,
   case-lifecycle state diagram (plain Markdown, GitHub-rendered)
-- [docs/diagrams.html](docs/diagrams.html) — same four diagrams as a
-  standalone navigable page (open directly in a browser)
 
 ## Where this would go next (production deltas)
 

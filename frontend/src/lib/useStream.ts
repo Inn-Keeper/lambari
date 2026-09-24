@@ -1,4 +1,5 @@
 import { useEffect, useReducer } from "react";
+import type { Case } from "./api";
 
 export type Decision = "approve" | "review" | "decline";
 
@@ -7,6 +8,8 @@ export interface Stats {
   approved: number;
   reviewed: number;
   declined: number;
+  /** shed at ingest because the engine's buffer was full */
+  rejected: number;
   rate_per_sec: number;
   p50_us: number;
   p99_us: number;
@@ -47,6 +50,8 @@ export interface StreamState {
   recent: Verdict[];
   sim: SimState;
   cases: CaseCounts;
+  /** top open cases, worst first — the review queue's source */
+  queue: Case[];
   /** last ~90 rate samples for the throughput chart */
   rateHistory: number[];
 }
@@ -59,6 +64,7 @@ export interface StreamMessage {
   recent: Verdict[] | null;
   sim: SimState;
   cases: CaseCounts;
+  queue: Case[] | null;
 }
 
 export type StreamAction =
@@ -72,6 +78,7 @@ export const initialStreamState: StreamState = {
   recent: [],
   sim: { running: false, rate: 0 },
   cases: { open: 0, confirmed_fraud: 0, false_positive: 0 },
+  queue: [],
   rateHistory: [],
 };
 
@@ -88,6 +95,7 @@ export function streamReducer(s: StreamState, a: StreamAction): StreamState {
         recent: a.data.recent ?? [],
         sim: a.data.sim,
         cases: a.data.cases,
+        queue: a.data.queue ?? [],
         rateHistory: [...s.rateHistory, a.data.stats.rate_per_sec].slice(-MAX_HISTORY),
       };
   }

@@ -27,8 +27,9 @@ export function SimControl({ sim }: { sim: SimState }) {
     }
   };
 
-  const changeRate = async (v: number) => {
-    setRate(v);
+  // Dragging only moves the label; the server hears the rate once, on
+  // release. Each POST restarts the simulator.
+  const commitRate = async (v: number) => {
     if (!running) return;
     setError(false);
     try {
@@ -57,7 +58,8 @@ export function SimControl({ sim }: { sim: SimState }) {
           max={20000}
           step={500}
           value={[rate]}
-          onValueChange={([v]) => changeRate(v)}
+          onValueChange={([v]) => setRate(v)}
+          onValueCommit={([v]) => commitRate(v)}
           aria-label="Simulated transactions per second"
         >
           <Slider.Track className="relative h-1 grow rounded-full bg-panel-2">

@@ -25,6 +25,7 @@ type Server struct {
 
 	simMu     sync.Mutex
 	simStop   chan struct{}
+	simDone   chan struct{} // closed when the running simulator has exited
 	simRate   atomic.Int64
 	simActive atomic.Bool
 	mode      string // "inline" or "kafka"
@@ -51,20 +52,10 @@ func NewServer(eng *engine.Engine, store cases.Store, mode string) *Server {
 	return s
 }
 
-func (s *Server) Handler() http.Handler { return withCORS(s.mux) }
-
-func withCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
+// Handler serves same-origin only: the dashboard reaches the API through the
+// Vite proxy, so no CORS headers. Allowing "*" would let any site open in an
+// analyst's browser resolve cases or start the simulator.
+func (s *Server) Handler() http.Handler { return s.mux }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "mode": s.mode})
@@ -91,18 +82,28 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 // external load generator (or any upstream service) hits.
 func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 	var txs []model.Transaction
+	r.Body = http.MaxBytesReader(w, r.Body, maxIngestBytes)
 	if err := json.NewDecoder(r.Body).Decode(&txs); err != nil {
-		http.Error(w, `{"error":"invalid JSON body, expected array of transactions"}`, http.StatusBadRequest)
+		http.Error(w, `{"error":"invalid JSON body, expected array of transactions (max 8 MiB)"}`, http.StatusBadRequest)
 		return
+	}
+	// Validate the whole batch before scoring any of it, so a 400 means
+	// nothing was accepted and the caller can fix and resend all of it.
+	now := time.Now()
+	for i := range txs {
+		if txs[i].Timestamp.IsZero() {
+			txs[i].Timestamp = now
+		}
+		if err := txs[i].Validate(now); err != nil {
+			writeJSONStatus(w, http.StatusBadRequest, map[string]any{"error": err.Error(), "index": i})
+			return
+		}
 	}
 	// Accept a prefix and stop at the first refusal, so "accepted: N" means
 	// "the first N — resend from there". Scattered acceptance would leave the
 	// caller holding a count it cannot act on.
 	accepted := 0
 	for i := range txs {
-		if txs[i].Timestamp.IsZero() {
-			txs[i].Timestamp = time.Now()
-		}
 		if !s.eng.TrySubmit(txs[i]) {
 			break
 		}
@@ -112,20 +113,11 @@ func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
 	rejected := len(txs) - accepted
 	status := http.StatusOK
 	if rejected > 0 {
-		// Count the whole remainder, not just the one refusal we saw: the rest
-		// of the batch was shed without ever being offered.
+		// Count the whole unoffered remainder, not just the one refusal seen.
 		s.eng.RecordRejected(rejected)
-		// The engine is at capacity — a fact about this server, not about this
-		// caller's rate, so 503 rather than 429. Returning 200 with the count
-		// buried in the body is how a client misses it entirely.
-		//
-		// The retry contract is "resend from accepted", not "resend the batch".
-		// Re-offering the accepted prefix re-scores it: velocity windows advance
-		// twice for those cards, counters and rule fires double-count, and a
-		// second verdict is published. The per-process case queue suppresses a
-		// duplicate only while that case remains open; the full contract is in
-		// README.md#delivery-semantics.
-		// That is why the count is precise — the caller has to be too.
+		// 503, not 429: the limit is this server's capacity, not the caller's
+		// rate. Callers must resend from `accepted`; resending the whole batch
+		// scores the prefix twice (README.md#backpressure-at-the-ingest-boundary).
 		w.Header().Set("Retry-After", "1")
 		status = http.StatusServiceUnavailable
 	}
@@ -149,23 +141,21 @@ func (s *Server) simulate(w http.ResponseWriter, r *http.Request) {
 	s.simMu.Lock()
 	defer s.simMu.Unlock()
 
-	if s.simStop != nil {
-		close(s.simStop)
-		s.simStop = nil
-		s.simActive.Store(false)
-	}
+	s.stopSimulatorLocked()
 	s.simRate.Store(req.Rate)
 	if req.Rate > 0 {
 		s.simStop = make(chan struct{})
+		s.simDone = make(chan struct{})
 		s.simActive.Store(true)
-		go s.runSimulator(s.simStop)
+		go s.runSimulator(s.simStop, s.simDone)
 	}
 	writeJSON(w, map[string]any{"running": req.Rate > 0, "rate": req.Rate})
 }
 
 // runSimulator emits transactions in 20ms micro-batches, which keeps pacing
 // smooth at high rates without a hot spin loop.
-func (s *Server) runSimulator(stop <-chan struct{}) {
+func (s *Server) runSimulator(stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
 	gen := model.NewGenerator(time.Now().UnixNano())
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
@@ -183,6 +173,24 @@ func (s *Server) runSimulator(stop <-chan struct{}) {
 			}
 		}
 	}
+}
+
+// StopSimulator stops the simulator and waits for it to exit. Call it before
+// Engine.Stop: a Submit racing the engine's closed channel panics.
+func (s *Server) StopSimulator() {
+	s.simMu.Lock()
+	defer s.simMu.Unlock()
+	s.stopSimulatorLocked()
+}
+
+func (s *Server) stopSimulatorLocked() {
+	if s.simStop == nil {
+		return
+	}
+	close(s.simStop)
+	<-s.simDone
+	s.simStop, s.simDone = nil, nil
+	s.simActive.Store(false)
 }
 
 // stream pushes a stats snapshot + recent verdicts every 400ms over SSE.
@@ -210,6 +218,9 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 				"cases": map[string]int64{
 					"open": open, "confirmed_fraud": confirmed, "false_positive": falsePos,
 				},
+				// The top of the review queue rides the stream, so the dashboard
+				// never polls /api/cases.
+				"queue": s.store.List(cases.Open, queueInStream),
 				"sim": map[string]any{
 					"running": s.simActive.Load(),
 					"rate":    s.simRate.Load(),
@@ -254,6 +265,15 @@ func (s *Server) resolveCase(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, c)
 }
+
+// queueInStream is how many open cases each SSE frame carries: what the
+// dashboard shows.
+const queueInStream = 8
+
+// maxIngestBytes caps one ingest body. The load generator's 500-transaction
+// batches are ~150 KiB, so this leaves wide headroom while stopping an
+// unauthenticated caller from making the server decode an unbounded array.
+const maxIngestBytes = 8 << 20
 
 func writeJSON(w http.ResponseWriter, v any) {
 	writeJSONStatus(w, http.StatusOK, v)

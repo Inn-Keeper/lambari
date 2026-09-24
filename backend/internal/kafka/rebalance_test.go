@@ -18,23 +18,13 @@ import (
 	"lambari/internal/model"
 )
 
-// TestRebalanceLosesVelocityState demonstrates the load-bearing limitation of
-// this design: the sliding velocity windows live in the memory of whichever
-// process owns the partition. Move the partition and the windows do not move
-// with it.
+// TestRebalanceLosesVelocityState shows velocity windows staying behind when a
+// partition moves. Two consumers share a topic, 24 cards are driven to
+// card_velocity_extreme, then one consumer stops cleanly (as in a rolling
+// deploy). The survivor scores the moved cards as if it had never seen them.
 //
-// The experiment: two consumers in one group on a partitioned topic, a set of
-// cards hammering hard enough to be scored card_velocity_extreme, then one
-// consumer shuts down *cleanly* — no crash, the kind of thing a rolling deploy
-// does several times a day. The survivor inherits those partitions with empty
-// windows and scores the same cards, mid-attack, as if it had never seen them.
-// Cards on partitions the survivor already owned keep their history, so the
-// damage is partial and invisible in any aggregate metric.
-//
-// Every transaction here also trips amount_extreme, so a verdict is published
-// either way — otherwise losing the velocity flag would turn a Decline into an
-// Approve, which publishes nothing, and "no verdict" is indistinguishable from
-// "not consumed yet".
+// Every transaction also trips amount_extreme, so a verdict is published either
+// way and "window lost" can't be confused with "not consumed yet".
 //
 // Skipped unless LAMBARI_KAFKA_BROKERS is set — run via `make rebalance`.
 func TestRebalanceLosesVelocityState(t *testing.T) {
@@ -74,17 +64,10 @@ func TestRebalanceLosesVelocityState(t *testing.T) {
 	}
 	defer watcher.Close()
 
-	// "AtEnd" is resolved when the consumer actually starts, not when NewClient
-	// returns — franz-go connects lazily — so records produced before then are
-	// skipped forever. A blind poll is not enough to rule that out: against a
-	// fresh broker it can return before the watcher has a position at all, and
-	// half the verdicts then vanish.
-	//
-	// Round-trip a sentinel instead. Once one comes back, the watcher provably
-	// has a position, and everything produced afterwards is guaranteed to be
-	// seen. Resending each attempt covers the first sentinel landing before the
-	// watcher anchored. Its TxID deliberately does not carry the runID prefix,
-	// so collect() below ignores it.
+	// franz-go resolves "AtEnd" lazily, so records produced before the watcher
+	// has a position are skipped. Round-trip a sentinel first: once one comes
+	// back, everything produced afterwards is seen. Its TxID lacks the runID
+	// prefix, so collect() ignores it.
 	anchorWatcher(t, seeds, watcher, "prime_"+runID)
 
 	verdicts := map[string]model.Verdict{} // TxID -> verdict (last one wins; duplicates are identical)

@@ -14,7 +14,7 @@ function fmtUptime(sec: number): string {
 }
 
 export default function App() {
-  const { connected, stats, recent, sim, cases, rateHistory } = useStream();
+  const { connected, stats, recent, sim, cases, queue, rateHistory } = useStream();
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
@@ -48,7 +48,12 @@ export default function App() {
         <StatCard
           label="Throughput"
           value={`${(stats?.rate_per_sec ?? 0).toLocaleString()}/s`}
-          hint="transactions scored per second"
+          hint={
+            stats?.rejected
+              ? `${stats.rejected.toLocaleString()} shed at ingest`
+              : "transactions scored per second"
+          }
+          tone={stats?.rejected ? "warn" : "default"}
         />
         <StatCard
           label="Processed"
@@ -78,7 +83,7 @@ export default function App() {
       </div>
 
       <div className="mt-3">
-        <ReviewQueue counts={cases} tick={stats?.processed ?? 0} />
+        <ReviewQueue counts={cases} queue={queue} />
       </div>
 
       <div className="mt-3 grid gap-3 lg:grid-cols-3">

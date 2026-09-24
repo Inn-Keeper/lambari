@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -57,5 +58,64 @@ func TestUndecodableRecordGoesToDLQNotSilentlyDropped(t *testing.T) {
 	// which is exactly the property that makes committing after it safe.
 	if got := eng.Snapshot().Processed; got != 1 {
 		t.Fatalf("expected the 1 decodable record scored before handleRecords returned, got %d", got)
+	}
+}
+
+// A publish that failed must stop the commit. kgo's Flush returns nil for
+// failed records, so this is the only thing between a lost verdict and an
+// offset that claims it was delivered.
+func TestFailedPublishBlocksCommit(t *testing.T) {
+	eng := engine.New()
+	eng.Start()
+	defer eng.Stop()
+
+	committed := false
+	c := &Consumer{
+		eng:    eng,
+		flush:  func(context.Context) error { return errors.New("1 verdict publish(es) failed") },
+		commit: func(context.Context) error { committed = true; return nil },
+	}
+
+	if err := c.processBatch(context.Background(), nil); err == nil {
+		t.Fatal("expected an error so the consumer stops")
+	}
+	if committed {
+		t.Fatal("committed offsets past a failed publish")
+	}
+}
+
+// Failures must stick: the next commit would cover the failed batch's offsets
+// too, so a later clean batch cannot make committing safe again.
+func TestPublishErrorsAreSticky(t *testing.T) {
+	var e publishErrors
+	if err := e.check("verdict"); err != nil {
+		t.Fatalf("no failures yet, got %v", err)
+	}
+	e.record()
+	for i := 0; i < 2; i++ {
+		if e.check("verdict") == nil {
+			t.Fatalf("check %d: failure forgotten", i)
+		}
+	}
+}
+
+// A record that decodes but would corrupt a velocity window (here: no card
+// hash, so it would share one window with every other such record) is parked
+// in the DLQ like an undecodable one.
+func TestInvalidRecordGoesToDLQ(t *testing.T) {
+	eng := engine.New()
+	eng.Start()
+	defer eng.Stop()
+
+	var dead int
+	c := &Consumer{eng: eng, dlq: func(context.Context, *kgo.Record, error) { dead++ }}
+	bad, _ := json.Marshal(model.Transaction{ID: "tx_1", Timestamp: time.Now()})
+	c.handleRecords(context.Background(), []*kgo.Record{{Topic: Topic, Value: bad}})
+
+	if dead != 1 {
+		t.Fatalf("DLQ got %d records, want 1", dead)
+	}
+	if got := eng.Snapshot().Processed; got != 0 {
+		t.Fatalf("scored %d invalid records, want 0", got)
 	}
 }

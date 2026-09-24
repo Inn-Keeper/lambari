@@ -75,8 +75,8 @@ Five frontend runtime dependencies. Every addition needs to pay rent.
    rule chain and produces a `Verdict`.
 3. Every review/decline verdict fires the `OnFlagged` hook → opens a case
    and (in Kafka mode) publishes to the `verdicts` topic keyed by tx id.
-4. The dashboard consumes SSE (stats + recent verdicts + case counts) and
-   REST (case queue).
+4. The dashboard consumes SSE (stats + recent verdicts + case counts + the
+   top open cases) and uses REST only to resolve cases.
 
 ### Engine internals — the four load-bearing decisions
 - **Worker pool, not per-request goroutines.** Bounded channel (16,384) in
@@ -133,59 +133,11 @@ partial index for training-data export.
 
 ## 6. API reference
 
-| Endpoint | Purpose |
-|---|---|
-| `POST /api/transactions` | Batch JSON ingest (the HTTP IO path). Accepts a **prefix** and answers `503 + Retry-After` with `{accepted, rejected}` when saturated. Retry contract: resend from `accepted`, not the whole batch — re-posting the prefix re-scores it and double-advances velocity windows. |
-| `POST /api/simulate` | `{"rate": 5000}` starts built-in generator, `{"rate": 0}` stops. Max 100,000. |
-| `GET /api/stats` | Engine snapshot: counters, rate, p50/p99, queue depth, rule fires. |
-| `GET /api/stream` | SSE every 400ms: stats + recent verdicts + sim state + case counts. |
-| `GET /api/cases` | Review queue, worst first. `?status=resolved` for labeled history. |
-| `POST /api/cases/{id}/resolve` | Body `{"resolution":"confirmed_fraud"\|"false_positive"}`. 404 on double-resolve. |
-| `GET /api/health` | Liveness + mode (`inline` / `kafka`). |
-| `GET /metrics` | Prometheus text exposition, hand-written. Root-level by scrape convention, not under `/api`. Consumer-lag series appear in Kafka mode only. |
+See the README: [API](../README.md#api).
 
-**Kafka topics:** `transactions` in (keyed by card token → per-card ordering
-within a partition, which velocity rules depend on) · `verdicts` out (keyed
-by tx id).
+## 7. Verified performance
 
-## 7. Verified performance (measured, not estimated)
-
-Two machines appear below; the label says which. The older rows are from a
-containerized environment (Intel Xeon 2.80GHz), the ceiling ramp from a Mac
-mini M1 (8 cores, 16 GB) where **the load generator shares the cores with the
-server**, so the server-only ceiling is higher than measured.
-
-| Metric | Value | How measured |
-|---|---|---|
-| Engine throughput (M1) | **~712,000 tx/sec** | `go test -bench`, no IO — the upper bound |
-| HTTP ingest ceiling (M1) | **~447,000 tx/sec** at 6 senders | Fresh engine per run, 15s, batch 500; 7.7% shed at the peak |
-| Past the peak (M1) | 273,000 tx/sec at 16 senders, 52.5% shed | Congestion collapse — more offered load, less work done |
-| Kafka produce, 6 partitions (M1) | ~430,000–560,000 tx/sec | `loadgen -kafka -rate 0`; was ~20k/s on the old single-partition topic |
-| Kafka consume + score, one consumer (M1) | ~150,000–180,000 tx/sec | Peak lag >2M — the KEDA signal doing its job |
-| Engine throughput (Xeon) | ~154,000 tx/sec | `go test -bench`, full worker pool, drain included in timing |
-| Sustained end-to-end | 5,000–6,000 tx/s | Built-in simulator + SSE-observed rate |
-| Scoring latency p50 | ~2µs | Under 5k tx/s load; now reported as the enclosing bucket (`≤2µs`) |
-| Scoring latency p99 | 33–123µs | Same; reported as `≤50µs` / `≤250µs` |
-| Flagged rate on synthetic traffic | ~5.5–5.8% | Generator embeds ~8–10% fraud patterns; some score below thresholds |
-| Queue depth under 6k tx/s | 0 / 16,384 | Engine never saturated at demo rates |
-| Velocity windows lost on a clean rebalance | 12–15 of 24 cards | `make rebalance`: two consumers, 6 partitions, SIGTERM one (four runs) |
-
-Historical note: the first benchmark read ~130k tx/sec; removing a dead map
-write from the hot path (see §9, fix 1) raised it to ~154k.
-
-**What limits the ceiling is memory, not CPU.** At ~400k tx/s the live heap
-reached 2.7 GB in 18 seconds (`gctrace`), GC climbed to 9% of CPU with single
-assist waves of 1,396 ms, and throughput stopped being a number: a 60s run
-averaged 284k tx/s while swinging between 67k and 545k second to second. The
-API process sat at ~430% CPU of 800% available — not starved, stalling. Cause:
-every transaction touches a card key and an IP key, and `StartSweeper` evicts
-only entries older than **10 minutes** while the rules look back 60s (card) and
-5 min (IP). Nothing reads an entry older than its own window, yet everything is
-retained. Caveat: the synthetic generator draws a random card token and IP per
-transaction, so nearly every transaction mints two *new* keys — the worst case.
-Real traffic repeats cards and steady-state memory tracks distinct keys within
-the retention window, not throughput. The shape of the bound is real regardless:
-retention is set by the sweep cutoff, not by the windows it serves.
+See the README: [Throughput ceiling (measured)](../README.md#throughput-ceiling-measured).
 
 ## 8. Frontend design system
 
@@ -235,39 +187,13 @@ because the *pattern* of each is reusable):
 | 4 | `score()` called `processed.Load()` twice after `Add(1)` already returned the value | Redundant atomics on hot path | Minor cost, sloppy | Capture `pn := Add(1)` once |
 | 5 | `cmd/api` started the consumer with `go consumer.Run(ctx)` and never waited for it | Shutdown ordering | SIGTERM could exit before `LeaveGroup`, stranding the member's partitions for the ~45s session timeout; `eng.Stop()` could also close the buffer under an in-flight `SubmitBatch` | Wait on a `consumerDone` channel before stopping the engine (found while building `make rebalance`, which needs a clean leave) |
 
-## 10. Known tradeoffs (documented, not hidden)
+## 10. Known tradeoffs
 
-- **Velocity state is per-instance, and partition affinity is not a fix.**
-  Producing keyed by card token keeps one card on one partition, which is
-  what makes the windows coherent — but the window still lives in the
-  memory of whoever owns that partition today. `make rebalance` measures
-  the consequence: stopping one of two consumers with SIGTERM (a rolling
-  deploy) left 12–15 of 24 cards mid-attack scoring as first-time traffic,
-  with no error raised anywhere. External state (Redis, Flink) is the only
-  real fix; the open question is what it costs in throughput.
-- **SSE marshals per connection.** Fine for a dashboard; a fleet of
-  consumers needs a single-marshal broadcaster.
-- **Velocity state is retained far longer than it is read.** The sweeper's
-  cutoff is 10 minutes; the longest rule window is 5. That is what turns
-  sustained load into a memory ceiling (§7), and it is the cheapest thing
-  on this list to change — the expensive part is bounding the state at all.
-- **Case = tx (1:1).** Production groups related transactions (same card,
-  same ring) into one case.
-- **No auth.** Stated PoC scope cut.
+See the README: [Where this would go next](../README.md#where-this-would-go-next-production-deltas) and [Delivery semantics](../README.md#delivery-semantics).
 
-## 11. Roadmap (production deltas, in order)
+## 11. Roadmap
 
-1. **pgx implementation of `cases.Store`** against `schema.sql` — the
-   interface and schema are already aligned.
-2. **ML sidecar**: Python service trained on resolution labels, exposed to
-   Go as one more `Rule` in the chain (score contribution like any other).
-3. **Redis-backed velocity state** if multi-instance without partition
-   affinity is needed.
-4. **OpenTelemetry** traces around `score()`; the p99 budget becomes the SLO.
-5. **AuthN/AuthZ** on the API; analyst identity on resolutions
-   (`resolved_by` column already in schema).
-6. **Case grouping** (ring detection) and a `verdicts` topic consumer for
-   notifications / data lake.
+See the README: [Where this would go next](../README.md#where-this-would-go-next-production-deltas).
 
 ## 12. Operational runbook
 
@@ -293,21 +219,4 @@ Env vars: `LAMBARI_ADDR` (default `:8080`) ·
 
 ## 13. Repository layout
 
-```
-backend/
-  cmd/api/          # entrypoint: HTTP + optional Kafka consumer + hooks
-  cmd/loadgen/      # traffic flood tool (HTTP or Kafka transport)
-  internal/engine/  # worker pool, rules, sharded state, tests + benchmark
-  internal/model/   # transaction/verdict types, synthetic generator
-  internal/kafka/   # franz-go consumer + producers (transactions in, verdicts out)
-  internal/cases/   # review queue store + tests
-  go.mod            # one dependency: franz-go
-frontend/
-  src/lib/useStream.ts   # typed SSE hook
-  src/components/        # StatCard, ThroughputChart, Breakdown, LiveFeed,
-                         # ReviewQueue, SimControl
-  src/index.css          # Tailwind v4 @theme design tokens
-schema.sql          # Postgres shape for cases.Store
-docker-compose.yml  # Redpanda + Redpanda Console
-Makefile            # every workflow, one word each
-```
+See the README: [Layout](../README.md#layout).

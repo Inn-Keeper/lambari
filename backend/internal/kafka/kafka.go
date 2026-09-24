@@ -7,6 +7,7 @@ package kafka
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"sync"
@@ -35,6 +36,9 @@ type Consumer struct {
 	// Called before every offset commit: committing first would mean a crash
 	// silently loses whatever publishes were still buffered.
 	flush func(ctx context.Context) error
+	// commit marks every polled offset as done. Injected alongside flush so
+	// the flush-before-commit ordering can be tested without a broker.
+	commit func(ctx context.Context) error
 	// lag is fed from every fetch and read by the metrics endpoint.
 	lag lagTracker
 }
@@ -57,10 +61,13 @@ func NewConsumer(brokers []string, eng *engine.Engine, dlq *DLQProducer, verdict
 		kgo.ConsumeTopics(Topic),
 		kgo.FetchMaxBytes(16<<20),
 		kgo.DisableAutoCommit(), // commit only once the engine has scored the batch
-		// Last chance before partitions move to another member: franz-go blocks
-		// the rebalance until the in-flight PollFetches has been handled, and
-		// handleRecords only returns once scoring is done — so by the time this
-		// runs, everything worth committing is genuinely complete.
+		// Without this, franz-go may run OnPartitionsRevoked concurrently with
+		// processing, and its commit would claim a batch still being scored.
+		// Blocked, a rebalance waits for AllowRebalance, which Run calls only
+		// after the batch is scored, flushed and committed.
+		kgo.BlockRebalanceOnPoll(),
+		// Last chance before partitions move to another member (and on Close).
+		// Thanks to BlockRebalanceOnPoll it runs between batches, never inside one.
 		kgo.OnPartitionsRevoked(func(ctx context.Context, cl *kgo.Client, revoked map[string][]int32) {
 			if err := c.flush(ctx); err != nil {
 				slog.Error("flush on partition revoke — skipping commit, records will replay", "err", err)
@@ -75,56 +82,75 @@ func NewConsumer(brokers []string, eng *engine.Engine, dlq *DLQProducer, verdict
 		return nil, err
 	}
 	c.client = client
+	c.commit = client.CommitUncommittedOffsets
 	return c, nil
 }
 
-// Run polls until ctx is cancelled. Poll → decode → score → commit, in that
-// order. Committing after scoring rather than after queueing is what makes the
-// pipeline at-least-once: a crash replays the batch instead of losing it.
-// Backpressure still applies — if the engine's buffer fills, the batch blocks,
-// polling slows, and consumer lag becomes visible in Kafka where you can alert
-// on it.
-func (c *Consumer) Run(ctx context.Context) {
+// Run polls until ctx is cancelled: poll → decode → score → flush → commit.
+// Committing after scoring makes it at-least-once; a full engine blocks the
+// batch, which shows up as consumer lag. It returns an error only when a
+// publish failed, and the caller should then exit so a restart replays.
+func (c *Consumer) Run(ctx context.Context) error {
 	defer c.client.Close()
 	for {
 		fetches := c.client.PollFetches(ctx)
 		if ctx.Err() != nil {
-			return
+			c.client.AllowRebalance()
+			return nil
 		}
-		if errs := fetches.Errors(); len(errs) > 0 {
-			for _, e := range errs {
-				slog.Error("kafka fetch", "topic", e.Topic, "err", e.Err)
-			}
-			time.Sleep(time.Second)
-			continue
-		}
-
-		// The high watermark rides along on every fetch, so lag costs nothing
-		// beyond reading it.
-		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
-			last := int64(-1)
-			if n := len(p.Records); n > 0 {
-				last = p.Records[n-1].Offset
-			}
-			c.lag.Observe(p.Partition, p.HighWatermark, last)
-		})
-
-		recs := make([]*kgo.Record, 0, fetches.NumRecords())
-		fetches.EachRecord(func(rec *kgo.Record) { recs = append(recs, rec) })
-		c.handleRecords(ctx, recs)
-
-		if err := c.flush(ctx); err != nil {
-			// Not committing is the safe failure: these records redeliver on
-			// restart instead of their verdicts vanishing.
-			if ctx.Err() == nil {
-				slog.Error("producer flush before commit — skipping commit", "err", err)
-			}
-			continue
-		}
-		if err := c.client.CommitUncommittedOffsets(ctx); err != nil && ctx.Err() == nil {
-			slog.Error("kafka commit", "err", err)
+		err := c.handleFetches(ctx, fetches)
+		// Every poll must be paired with this (BlockRebalanceOnPoll); by now
+		// the batch is committed or deliberately left uncommitted.
+		c.client.AllowRebalance()
+		if err != nil {
+			return err
 		}
 	}
+}
+
+func (c *Consumer) handleFetches(ctx context.Context, fetches kgo.Fetches) error {
+	if errs := fetches.Errors(); len(errs) > 0 {
+		for _, e := range errs {
+			slog.Error("kafka fetch", "topic", e.Topic, "err", e.Err)
+		}
+		time.Sleep(time.Second)
+		return nil
+	}
+
+	// The high watermark rides along on every fetch, so lag costs nothing
+	// beyond reading it.
+	fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+		last := int64(-1)
+		if n := len(p.Records); n > 0 {
+			last = p.Records[n-1].Offset
+		}
+		c.lag.Observe(p.Partition, p.HighWatermark, last)
+	})
+
+	recs := make([]*kgo.Record, 0, fetches.NumRecords())
+	fetches.EachRecord(func(rec *kgo.Record) { recs = append(recs, rec) })
+	return c.processBatch(ctx, recs)
+}
+
+// processBatch scores a batch, then commits it only if every verdict and DLQ
+// record it produced actually reached the broker.
+func (c *Consumer) processBatch(ctx context.Context, recs []*kgo.Record) error {
+	c.handleRecords(ctx, recs)
+	if err := c.flush(ctx); err != nil {
+		if ctx.Err() != nil {
+			// Shutting down mid-flush. Nothing is lost: the publishes carry a
+			// context that shutdown doesn't cancel, and the revoke hook on
+			// Close flushes and commits them, or skips the commit if one failed.
+			return nil
+		}
+		return fmt.Errorf("publish failed, not committing: %w", err)
+	}
+	if err := c.commit(ctx); err != nil && ctx.Err() == nil {
+		// A failed commit is safe to carry on from: the next one covers these
+		// offsets, and until then a crash only replays them.
+		slog.Error("kafka commit", "err", err)
+	}
+	return nil
 }
 
 // handleRecords decodes a batch, routes what it cannot parse to the DLQ, and
@@ -141,7 +167,17 @@ func (c *Consumer) handleRecords(ctx context.Context, recs []*kgo.Record) {
 			// keeping.
 			slog.Error("undecodable record routed to dlq",
 				"topic", rec.Topic, "partition", rec.Partition, "offset", rec.Offset, "err", err)
-			c.dlq(ctx, rec, err)
+			// WithoutCancel: a shutdown mid-batch must not fail a DLQ publish
+			// the revoke hook is about to commit past.
+			c.dlq(context.WithoutCancel(ctx), rec, err)
+			continue
+		}
+		// Same rules as HTTP ingest. A record that would corrupt a velocity
+		// window is parked with the undecodable ones.
+		if err := tx.Validate(time.Now()); err != nil {
+			slog.Error("invalid record routed to dlq",
+				"topic", rec.Topic, "partition", rec.Partition, "offset", rec.Offset, "err", err)
+			c.dlq(context.WithoutCancel(ctx), rec, err)
 			continue
 		}
 		txs = append(txs, tx)
@@ -207,6 +243,7 @@ func (p *Producer) Close() {
 // to trace each one back to where it came from.
 type DLQProducer struct {
 	client *kgo.Client
+	errs   publishErrors
 }
 
 func NewDLQProducer(brokers []string) (*DLQProducer, error) {
@@ -233,16 +270,23 @@ func (p *DLQProducer) Send(ctx context.Context, rec *kgo.Record, cause error) {
 		},
 	}, func(_ *kgo.Record, err error) {
 		if err != nil {
-			// Nothing left to fall back on: say so loudly rather than lose it quietly.
-			slog.Error("dlq publish failed — record lost",
+			// Flush reports this, so the offset is never committed past it.
+			p.errs.record()
+			slog.Error("dlq publish failed",
 				"origin_topic", rec.Topic, "origin_offset", rec.Offset, "err", err)
 		}
 	})
 }
 
-// Flush blocks until every buffered DLQ record is on the broker — the
-// consumer calls this before committing offsets that cover those records.
-func (p *DLQProducer) Flush(ctx context.Context) error { return p.client.Flush(ctx) }
+// Flush blocks until every buffered DLQ record is settled, and errors if any
+// publish has ever failed — the consumer calls this before committing offsets
+// that cover those records.
+func (p *DLQProducer) Flush(ctx context.Context) error {
+	if err := p.client.Flush(ctx); err != nil {
+		return err
+	}
+	return p.errs.check("dlq")
+}
 
 func (p *DLQProducer) Close() {
 	p.client.Flush(context.Background())
@@ -257,6 +301,7 @@ const VerdictTopic = "verdicts"
 // (notification services, data lake sinks, model-training pipelines).
 type VerdictProducer struct {
 	client *kgo.Client
+	errs   publishErrors
 }
 
 func NewVerdictProducer(brokers []string) (*VerdictProducer, error) {
@@ -273,9 +318,15 @@ func NewVerdictProducer(brokers []string) (*VerdictProducer, error) {
 	return &VerdictProducer{client: client}, nil
 }
 
-// Flush blocks until every buffered verdict is on the broker — the consumer
-// calls this before committing the offsets those verdicts came from.
-func (p *VerdictProducer) Flush(ctx context.Context) error { return p.client.Flush(ctx) }
+// Flush blocks until every buffered verdict is settled, and errors if any
+// publish has ever failed — the consumer calls this before committing the
+// offsets those verdicts came from.
+func (p *VerdictProducer) Flush(ctx context.Context) error {
+	if err := p.client.Flush(ctx); err != nil {
+		return err
+	}
+	return p.errs.check("verdict")
+}
 
 func (p *VerdictProducer) Send(ctx context.Context, v model.Verdict) {
 	b, err := json.Marshal(v)
@@ -285,7 +336,21 @@ func (p *VerdictProducer) Send(ctx context.Context, v model.Verdict) {
 	}
 	p.client.Produce(ctx, &kgo.Record{Key: []byte(v.TxID), Value: b}, func(_ *kgo.Record, err error) {
 		if err != nil {
+			p.errs.record()
 			slog.Error("publish verdict", "err", err)
 		}
 	})
+}
+
+// publishErrors records async publish failures, which kgo's Flush does not
+// report. It never resets: any later commit would also cover the failed batch.
+type publishErrors struct{ n atomic.Int64 }
+
+func (e *publishErrors) record() { e.n.Add(1) }
+
+func (e *publishErrors) check(what string) error {
+	if n := e.n.Load(); n > 0 {
+		return fmt.Errorf("%d %s publish(es) failed", n, what)
+	}
+	return nil
 }

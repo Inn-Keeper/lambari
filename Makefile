@@ -1,7 +1,7 @@
-.PHONY: setup build run-api run-web sim bench test test-web loadgen kafka-up kafka-run broker-check e2e rebalance
+.PHONY: setup build run-api run-web sim bench test test-web loadgen kafka-up kafka-run kafka-loadgen broker-check e2e rebalance
 
 setup:            ## install backend + frontend dependencies
-	cd backend && go mod tidy
+	cd backend && go mod download
 	pnpm install
 
 build:            ## compile backend binaries (backend/api, backend/loadgen)

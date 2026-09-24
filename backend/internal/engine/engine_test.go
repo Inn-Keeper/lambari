@@ -172,3 +172,22 @@ func TestRecordRejectedAccumulates(t *testing.T) {
 		t.Fatalf("Rejected = %d, want 42", got)
 	}
 }
+
+// A hot key must not grow without bound: each touch scans the whole slice. The
+// cap still has to let the largest threshold (30) be reached.
+func TestVelocityWindowIsCappedButStillSaturates(t *testing.T) {
+	sh := &shard{seen: map[string][]int64{}}
+	var n int
+	for i := int64(0); i < 1000; i++ {
+		n = sh.touch("ip", 1_000+i, 300_000)
+	}
+	if got := len(sh.seen["ip"]); got != maxWindowEvents {
+		t.Fatalf("kept %d timestamps, want %d", got, maxWindowEvents)
+	}
+	if n < 30 {
+		t.Fatalf("count saturated at %d, below the ip_fanout_extreme threshold", n)
+	}
+	if last := sh.seen["ip"][maxWindowEvents-1]; last != 1_999 {
+		t.Fatalf("newest kept timestamp = %d, want 1999 (oldest must be dropped)", last)
+	}
+}

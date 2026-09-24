@@ -12,6 +12,7 @@ function msg(rate: number): StreamMessage {
       approved: 1,
       reviewed: 0,
       declined: 0,
+      rejected: 0,
       rate_per_sec: rate,
       p50_us: 10,
       p99_us: 20,
@@ -24,6 +25,7 @@ function msg(rate: number): StreamMessage {
     recent: null,
     sim: { running: false, rate: 0 },
     cases: { open: 0, confirmed_fraud: 0, false_positive: 0 },
+    queue: null,
   };
 }
 
@@ -39,6 +41,7 @@ describe("streamReducer", () => {
     expect(s.connected).toBe(true);
     expect(s.stats?.rate_per_sec).toBe(42);
     expect(s.recent).toEqual([]);
+    expect(s.queue).toEqual([]);
     expect(s.rateHistory).toEqual([42]);
   });
 

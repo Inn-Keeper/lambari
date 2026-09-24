@@ -17,7 +17,6 @@ export interface QueueState {
 
 export type QueueAction =
   | { type: "loaded"; cases: Case[] }
-  | { type: "loadFailed" }
   | { type: "resolveStart"; id: string }
   | { type: "resolveOk" }
   | { type: "resolveFail" }
@@ -51,8 +50,6 @@ export function casesReducer(s: QueueState, a: QueueAction): QueueState {
       // optimistically removed — keep it removed until resolveOk/Fail decides
       return { ...s, cases: withoutBusy(a.cases, s.busy), error: null };
     }
-    case "loadFailed":
-      return { ...s, error: "Couldn't refresh the queue — retrying on next update" };
     case "resolveStart": {
       const index = s.cases.findIndex((c) => c.id === a.id);
       if (index < 0 || s.busy) return s;

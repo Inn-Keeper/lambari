@@ -66,20 +66,9 @@ func NewMemStore(maxOpen int) *MemStore {
 	return &MemStore{open: make(map[string]*Case), maxOpen: maxOpen}
 }
 
-// Open creates a case for a flagged verdict, suppressing a duplicate **while
-// the case is still open** — which covers the window that matters, since
-// redelivery is bounded to one in-flight batch.
-//
-// It is not idempotent for all time, and the docs must not claim it is: the
-// TxID is forgotten once the case is resolved or evicted, and a replay after
-// either reopens the case. That is a property of *this* store being in-memory
-// and capped, not a design principle — `schema.sql` makes tx_id the primary
-// key, so a pgx implementation would dedupe for the row's whole lifetime and be
-// strictly better here.
-//
-// Open runs after Engine.score has already advanced the velocity windows, so
-// deduping at this effect cannot block their replay-driven rebuild. A durable
-// Store can safely preserve TxIDs for the case row's lifetime.
+// Open creates a case for a flagged verdict, ignoring a duplicate while that
+// case is still open. Once it is resolved or evicted the TxID is forgotten and a
+// replay reopens it; a Postgres store (tx_id primary key) would dedupe for good.
 func (s *MemStore) Open(v model.Verdict) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -154,11 +143,4 @@ func (s *MemStore) Counts() (open, confirmed, falsePos int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return int64(len(s.open)), s.resolved.confirmed, s.resolved.falsePos
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

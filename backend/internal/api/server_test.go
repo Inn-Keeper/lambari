@@ -164,3 +164,61 @@ func TestIngestReturns200WhenNothingIsShed(t *testing.T) {
 		t.Errorf("Retry-After = %q on a healthy request, want none", retryAfter)
 	}
 }
+
+// ---- ingest validation ----------------------------------------------------
+
+func postRaw(s *Server, body []byte) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("POST", "/api/transactions", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
+// One bad transaction rejects the batch before any of it is scored, so the
+// caller can fix and resend all of it without double-scoring a prefix.
+func TestIngestRejectsInvalidBatchWithoutScoringAny(t *testing.T) {
+	eng := engine.New() // never started: queue depth shows what was submitted
+	s := NewServer(eng, cases.NewMemStore(10), "inline")
+
+	noCard := tx(1)
+	noCard.CardHash = ""
+	future := tx(2)
+	future.Timestamp = time.Now().Add(time.Hour)
+
+	for name, bad := range map[string]model.Transaction{"no card_hash": noCard, "future timestamp": future} {
+		body, _ := json.Marshal([]model.Transaction{tx(0), bad})
+		rec := postRaw(s, body)
+		if rec.Code != 400 {
+			t.Errorf("%s: status = %d, want 400", name, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `"index":1`) {
+			t.Errorf("%s: body %q does not point at the bad transaction", name, rec.Body.String())
+		}
+	}
+	if d := eng.Snapshot().QueueDepth; d != 0 {
+		t.Errorf("%d transactions submitted from rejected batches, want 0", d)
+	}
+}
+
+func TestIngestRejectsOversizedBody(t *testing.T) {
+	body := append([]byte(`[{"id":"`), bytes.Repeat([]byte("x"), maxIngestBytes)...)
+	if rec := postRaw(newTestServer(), body); rec.Code != 400 {
+		t.Errorf("status = %d, want 400 for a body over the cap", rec.Code)
+	}
+}
+
+// Shutdown used to panic with "send on closed channel": the simulator kept
+// submitting after Engine.Stop closed the buffer. StopSimulator must wait
+// until it has actually exited.
+func TestStopSimulatorBeforeEngineStopDoesNotPanic(t *testing.T) {
+	eng := engine.New()
+	eng.Start()
+	s := NewServer(eng, cases.NewMemStore(10), "inline")
+
+	req := httptest.NewRequest("POST", "/api/simulate", strings.NewReader(`{"rate":100000}`))
+	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	time.Sleep(50 * time.Millisecond) // let it submit a few batches
+
+	s.StopSimulator()
+	eng.Stop()
+}

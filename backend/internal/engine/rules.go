@@ -42,7 +42,15 @@ func shardFor(key string) uint32 {
 	return h.Sum32() % shardCount
 }
 
-// touch records an event for key and returns how many events landed inside the window.
+// maxWindowEvents caps the timestamps kept per key. The rules only ask whether
+// a count reached a threshold, and the largest threshold is 30
+// (ip_fanout_extreme), so older entries past that change no decision. Without
+// the cap, a hot key holds every event in its window and each touch scans all
+// of them. Raise it if a rule ever needs a higher threshold.
+const maxWindowEvents = 30
+
+// touch records an event for key and returns how many events landed inside
+// the window, saturating at maxWindowEvents.
 func (sh *shard) touch(key string, now int64, windowMS int64) int {
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
@@ -56,19 +64,14 @@ func (sh *shard) touch(key string, now int64, windowMS int64) int {
 		}
 	}
 	kept = append(kept, now)
+	if n := len(kept); n > maxWindowEvents {
+		kept = kept[:copy(kept, kept[n-maxWindowEvents:])] // drop the oldest
+	}
 	sh.seen[key] = kept
 	return len(kept)
 }
 
 // ---- rules ---------------------------------------------------------------
-
-// binCountry maps a card BIN prefix to its issuing country (toy table for the PoC;
-// production would use a licensed BIN database).
-var binCountry = map[string]string{
-	"411111": "US", "455673": "GB", "510510": "DE",
-	"520082": "SE", "530127": "SE", "601100": "US",
-	"356600": "JP", "627780": "BR", "506699": "NG",
-}
 
 // highRiskMCC flags merchant categories with elevated chargeback rates.
 var highRiskMCC = map[string]bool{
@@ -119,7 +122,7 @@ func RuleIPFanOut(tx *model.Transaction, s *State) (int, string) {
 
 // RuleGeoMismatch: card issued in one country, transaction originating in another.
 func RuleGeoMismatch(tx *model.Transaction, _ *State) (int, string) {
-	issuer, ok := binCountry[tx.CardBIN]
+	issuer, ok := model.BINCountry[tx.CardBIN]
 	if ok && issuer != tx.Country {
 		return 25, "geo_mismatch"
 	}

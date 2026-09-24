@@ -63,7 +63,7 @@ sequenceDiagram
     end
     W-->>E: Verdict recorded (atomics, latency histogram)
     loop every 400ms
-        E->>D: stats + recent verdicts + case counts
+        E->>D: stats + recent verdicts + case counts + top open cases
     end
 ```
 

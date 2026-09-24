@@ -531,16 +531,16 @@
 
     <div class="scaleline">
       <div>
-        <span class="n">130k/s</span>
+        <span class="n">1.2M/s</span>
         <span class="k">Engine bench, in-process</span>
       </div>
       <div>
-        <span class="n">7.8M/min</span>
+        <span class="n">72M/min</span>
         <span class="k">Same number, in requests/min</span>
       </div>
       <div>
-        <span class="n warn">5k/s</span>
-        <span class="k">End-to-end — a flag, not a ceiling</span>
+        <span class="n warn">150–180k/s</span>
+        <span class="k">End-to-end through Kafka, one consumer</span>
       </div>
       <div>
         <span class="n">≤ 48</span>
@@ -569,11 +569,11 @@
           </div>
           <div class="node">
             <span class="t">Built-in simulator</span>
-            <span class="d">Driven from the console: <span class="m">POST /api/simulate</span>, up to 20k tx/s in-process.</span>
+            <span class="d">Driven from the console: <span class="m">POST /api/simulate</span>. The slider goes to 20k tx/s; the API accepts up to 100k.</span>
           </div>
           <div class="node">
             <span class="t">Direct ingest</span>
-            <span class="d"><span class="m">POST /api/transactions</span> — the operator-facing path.</span>
+            <span class="d"><span class="m">POST /api/transactions</span> — the operator-facing path. When the buffer is full it keeps the first N, answers 503, and the caller resends from N.</span>
           </div>
         </div>
 
@@ -605,13 +605,14 @@
               <li>Poll → decode (bad → DLQ) → score</li>
               <li><span class="m">SubmitBatch</span> blocks until scored</li>
               <li>Flush producers, <strong>then</strong> commit offsets</li>
-              <li>Flush + commit on <span class="m">OnPartitionsRevoked</span></li>
+              <li>Any failed publish: stop committing, exit, replay</li>
+              <li>Rebalance blocked mid-batch; flush + commit on <span class="m">OnPartitionsRevoked</span></li>
             </ul>
           </div>
           <div class="updown" aria-hidden="true">↕</div>
           <div class="node">
             <span class="t">Engine</span>
-            <span class="d">Worker pool (2×CPU) behind a 16,384-slot bounded channel; sliding windows over 256 FNV mutex shards; five additive rules; ~130k/s in-process.</span>
+            <span class="d">Worker pool (2×CPU) behind a 16,384-slot bounded channel; sliding windows over 256 FNV mutex shards; five additive rules; ~1.2–1.5M/s in-process.</span>
           </div>
         </div>
 
@@ -672,8 +673,8 @@
         <li><strong>Produced.</strong> The load generator marshals a transaction and produces it to <span class="m">transactions</span>, keyed by card hash — so this card's events all land in one partition, in order.</li>
         <li><strong>Fetched.</strong> The consumer polls a batch. Anything that fails to decode is published to <span class="m">transactions.dlq</span> with origin topic/partition/offset headers; it never blocks the batch and never vanishes.</li>
         <li><strong>Scored.</strong> <span class="m">SubmitBatch</span> fans the batch across the worker pool and blocks until every transaction has run the five-rule chain — amount, card velocity, IP fan-out, geo mismatch, high-risk merchant. Points sum; ≥40 opens a review, ≥70 declines.</li>
-        <li><strong>Outputs made durable, then committed.</strong> Flagged verdicts are published (keyed by <span class="m">TxID</span>) and a case opens. The verdict and DLQ producers are flushed, and only then are the offsets committed. Kill the process anywhere in this window and the batch replays — duplicates possible. <span class="m">make e2e</span> proves every expected verdict reaches the topic despite that SIGKILL. It says nothing about the case queue, which is in-memory and per-process and does not survive the restart. Where duplicates land is stated once, in the README's <a href="../README.md#delivery-semantics"><em>Delivery semantics</em></a>; it is deliberately not restated here.</li>
-        <li><strong>Streamed.</strong> Once per second the API pushes an SSE frame — stats, recent verdicts, case counts — and the dashboard's reducer applies it. The frame counter doubles as the review queue's refetch signal.</li>
+        <li><strong>Outputs made durable, then committed.</strong> Flagged verdicts are published (keyed by <span class="m">TxID</span>) and a case opens. The verdict and DLQ producers are flushed, and only then are the offsets committed. A flush only proves the publishes finished, so the producers also count failures; one failure stops all further commits and the process exits for a replay. Rebalances wait until the batch is committed. Kill the process anywhere in this window and the batch replays — duplicates possible. <span class="m">make e2e</span> proves every expected verdict reaches the topic despite that SIGKILL. It says nothing about the case queue, which is in-memory and per-process and does not survive the restart. Where duplicates land is stated once, in the README's <a href="../README.md#delivery-semantics"><em>Delivery semantics</em></a>; it is deliberately not restated here.</li>
+        <li><strong>Streamed.</strong> Every 400ms the API pushes an SSE frame — stats, recent verdicts, case counts and the top eight open cases — and the dashboard's reducer applies it. The review queue renders straight from that frame; nothing polls.</li>
         <li><strong>Triaged.</strong> The queue lists open cases worst-first and freezes while your pointer is over it. Resolving is optimistic: the row leaves immediately, comes back with an error if the server refused, stays gone with a note if the case was already evicted.</li>
         <li><strong>Labeled.</strong> The resolution — confirmed fraud or false positive — is stored. That label stream is the feedback loop the whole design points at.</li>
       </ol>
@@ -691,6 +692,7 @@
           <tr><td><span class="m">make kafka-up</span> → <span class="m">make kafka-run</span> → <span class="m">make kafka-loadgen</span></td><td>Kafka mode: Redpanda in Docker, the API consuming from the topic, the load generator producing into it.</td></tr>
           <tr><td><span class="m">make test</span> / <span class="m">make test-web</span></td><td>Go suite / React suite (vitest + Testing Library).</td></tr>
           <tr><td><span class="m">make e2e</span></td><td>The crash-replay proof: streams transactions, SIGKILLs the real consumer mid-batch, restarts it, and asserts every verdict arrived at least once.</td></tr>
+          <tr><td><span class="m">make rebalance</span></td><td>Two consumers, one stopped with SIGTERM: counts the velocity windows lost when partitions move.</td></tr>
           <tr><td><span class="m">make bench</span></td><td>In-process engine throughput benchmark.</td></tr>
           <tr><td><span class="m">curl localhost:8080/metrics</span></td><td>The scrape: counters, queue depth, a bucketed scoring-latency histogram, and — in Kafka mode — consumer lag per partition plus a total.</td></tr>
         </tbody>
@@ -873,7 +875,7 @@
           <dt>The bug</dt>
           <dd>Committing after enqueue is at-most-once. A crash drops everything still buffered — in a fraud system, silently. And async producers add a second window: a verdict still in the client buffer dies with the process even though its offset was committed.</dd>
           <dt>Move</dt>
-          <dd class="pick">At-least-once: commit only after scoring, flush the producers before every commit. Where the resulting duplicates land is a longer answer with three parts, and it lives in one place — the README's <a href="../README.md#delivery-semantics"><em>Delivery semantics</em></a> — rather than being paraphrased here. Same shape as a retried wallet call, which is a connection worth making out loud.</dd>
+          <dd class="pick">At-least-once: commit only after scoring, flush the producers before every commit, and treat a failed publish as a reason to stop committing. A flush returns once the buffer drains, even if records in it failed. Where the resulting duplicates land is a longer answer with three parts, and it lives in one place — the README's <a href="../README.md#delivery-semantics"><em>Delivery semantics</em></a> — rather than being paraphrased here. Same shape as a retried wallet call, which is a connection worth making out loud.</dd>
         </dl>
       </div>
 
@@ -943,7 +945,7 @@
           <tr>
             <td>Kafka consumer</td>
             <td><span class="state have">Built</span></td>
-            <td>At-least-once Kafka verdict delivery: commit after scoring, DLQ, commit-on-revoke, producers flushed before every commit. Proven by a crash-replay e2e that SIGKILLs the real binary against a real broker; case durability is outside that proof. See README <a href="../README.md#delivery-semantics"><em>Delivery semantics</em></a>.</td>
+            <td>At-least-once Kafka verdict delivery: commit after scoring, DLQ, commit-on-revoke with rebalances blocked mid-batch, producers flushed before every commit, and any failed publish stops commits for good. Proven by a crash-replay e2e that SIGKILLs the real binary against a real broker; case durability is outside that proof. See README <a href="../README.md#delivery-semantics"><em>Delivery semantics</em></a>.</td>
           </tr>
           <tr>
             <td>React console</td>
@@ -962,13 +964,13 @@
           </tr>
           <tr>
             <td>Real e2e ceiling</td>
-            <td><span class="state gap">Unknown</span></td>
-            <td>The crash-replay e2e proves the Kafka verdict-delivery semantics; the throughput ceiling is still the loadgen flag, not a discovered limit. Push it until it breaks and name the bottleneck.</td>
+            <td><span class="state have">Measured</span></td>
+            <td>~150–180k tx/s through consume, score, publish and commit with one consumer; HTTP ingest peaks at ~447k tx/s. The bottleneck is velocity-state memory and GC, not scoring CPU. Figures in the README.</td>
           </tr>
           <tr>
             <td>Distributed state</td>
             <td><span class="state talk">Talk track</span></td>
-            <td>In-process today. Redis or Flink in production — and I can explain exactly what breaks without it.</td>
+            <td>In-process today. <span class="m">make rebalance</span> measures the cost: a clean SIGTERM lost 15 of 24 cards' windows. Redis or Flink in production.</td>
           </tr>
           <tr>
             <td>Kubernetes</td>
@@ -1137,7 +1139,7 @@
           <dd>Rate of events per key over a window. Catches bursts a per-event rule can't see.</dd>
 
           <dt>IP fan-out</dt>
-          <dd>One IP touching many distinct accounts. The multi-accounting signal, and the enabler under most collusion.</dd>
+          <dd>One IP touching many distinct accounts. The multi-accounting signal, and the enabler under most collusion. The PoC counts all events per IP; distinct accounts would need a per-key set or HyperLogLog.</dd>
 
           <dt>Jurisdiction check</dt>
           <dd>Is this player playing from somewhere the licence covers? A compliance requirement first and a fraud signal second.</dd>

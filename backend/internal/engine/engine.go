@@ -9,16 +9,15 @@ import (
 	"lambari/internal/model"
 )
 
-// Engine is a bounded worker pool that scores transactions concurrently.
-// Ingest is non-blocking up to the buffer size; beyond that, backpressure
-// applies (Submit blocks), which is exactly what you want in front of Kafka.
-// job carries one transaction to a worker. wg is non-nil only for batch
-// submissions, where the caller needs to know when scoring actually finished.
+// job carries one transaction to a worker. wg is non-nil only for SubmitBatch,
+// whose caller needs to know when scoring finished.
 type job struct {
 	tx model.Transaction
 	wg *sync.WaitGroup
 }
 
+// Engine is a bounded worker pool that scores transactions concurrently.
+// Submit blocks once the buffer is full, so backpressure reaches the caller.
 type Engine struct {
 	in    chan job
 	rules []Rule
