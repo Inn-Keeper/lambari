@@ -23,6 +23,7 @@ import (
 const (
 	Topic    = "transactions"
 	DLQTopic = "transactions.dlq"
+	Group    = "lambari-scoring"
 )
 
 // Consumer pulls transaction batches from Kafka and feeds the engine.
@@ -57,7 +58,7 @@ func NewConsumer(brokers []string, eng *engine.Engine, dlq *DLQProducer, verdict
 	}}
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
-		kgo.ConsumerGroup("lambari-scoring"),
+		kgo.ConsumerGroup(Group),
 		kgo.ConsumeTopics(Topic),
 		kgo.FetchMaxBytes(16<<20),
 		kgo.DisableAutoCommit(), // commit only once the engine has scored the batch

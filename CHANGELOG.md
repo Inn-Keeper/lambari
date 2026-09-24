@@ -5,6 +5,9 @@ Notable changes, newest first. Earlier history is in `git log`.
 ## 2026-09-24
 
 ### Fixed
+- CI: the rebalance experiment waits until both consumers own partitions.
+  On a fast runner warm-up finished before the second one joined, so every
+  card moved and the run failed as a full reset.
 - Kafka: a failed verdict or DLQ publish no longer gets its offsets committed.
   kgo's `Flush` returns nil for failed records, so the producers now count
   failures; one failure stops all commits and the process exits non-zero to
@@ -40,6 +43,7 @@ Notable changes, newest first. Earlier history is in `git log`.
   removed `docs/diagrams.html` (duplicate of `docs/diagrams.md`).
 
 ### Added
+- `docs/glossary.md`: the project's vocabulary, grouped by domain.
 - GitHub Actions CI: gofmt, vet and race tests; dashboard tests and build; and
   the crash-replay and rebalance experiments against a real Redpanda broker.
 - `AGENTS.md` for this repo, replacing one copied from another project.

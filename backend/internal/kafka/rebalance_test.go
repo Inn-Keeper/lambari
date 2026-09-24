@@ -131,6 +131,12 @@ func TestRebalanceLosesVelocityState(t *testing.T) {
 	// of this test would spend ~45s waiting for a ghost.
 	t.Cleanup(func() { _ = b.Process.Signal(syscall.SIGTERM); _, _ = b.Process.Wait() })
 
+	// Warm-up must start with both members owning partitions. On a fast runner
+	// it can finish before b has even joined; a then owns everything, and the
+	// SIGTERM moves every card, which is a full reset, not the partial loss
+	// under test.
+	waitForSplit(t, seeds, 2)
+
 	// cold reports which cards are not showing extreme velocity as of round n.
 	cold := func(n int) []int {
 		var out []int
@@ -311,6 +317,44 @@ func anchorWatcher(t *testing.T, seeds []string, watcher *kgo.Client, sentinelID
 // The transactions topic needs enough partitions for two consumers to own a
 // share each — a single-partition topic cannot rebalance meaningfully, since
 // one member would own everything and the other would idle.
+// waitForSplit blocks until the consumer group is stable with `members`
+// members that each own at least one partition of Topic.
+func waitForSplit(t *testing.T, seeds []string, members int) {
+	t.Helper()
+	admin, err := kgo.NewClient(kgo.SeedBrokers(seeds...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	deadline := time.Now().Add(time.Minute)
+	for time.Now().Before(deadline) {
+		req := kmsg.NewPtrDescribeGroupsRequest()
+		req.Groups = []string{Group}
+		resp, err := req.RequestWith(context.Background(), admin)
+		if err == nil && len(resp.Groups) == 1 && resp.Groups[0].State == "Stable" {
+			owning := 0
+			for _, m := range resp.Groups[0].Members {
+				var a kmsg.ConsumerMemberAssignment
+				if a.ReadFrom(m.MemberAssignment) != nil {
+					continue
+				}
+				for _, tp := range a.Topics {
+					if tp.Topic == Topic && len(tp.Partitions) > 0 {
+						owning++
+						break
+					}
+				}
+			}
+			if owning == members {
+				return
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("group %s never settled with %d members owning partitions", Group, members)
+}
+
 func ensureTopic(t *testing.T, seeds []string, topic string, want int32) {
 	t.Helper()
 	admin, err := kgo.NewClient(kgo.SeedBrokers(seeds...))
