@@ -76,14 +76,17 @@ func (sh *shard) touch(key string, ts int64, windowMS int64) int {
 
 	at := sort.Search(len(events), func(i int) bool { return events[i] > ts })
 	events = slices.Insert(events, at, ts) // an append when in order
+
+	// Count before capping: the cap may drop timestamps inside this event's
+	// window when the event is late.
+	from := sort.Search(len(events), func(i int) bool { return events[i] >= ts-windowMS })
+	count := min(at+1-from, maxWindowEvents)
+
 	if n := len(events); n > maxWindowEvents {
 		events = events[:copy(events, events[n-maxWindowEvents:])] // keep the newest
 	}
 	sh.seen[key] = events
-
-	from := sort.Search(len(events), func(i int) bool { return events[i] >= ts-windowMS })
-	to := sort.Search(len(events), func(i int) bool { return events[i] > ts })
-	return max(to-from, 1) // ts itself may have been capped away if it is the oldest
+	return count
 }
 
 // ---- rules ---------------------------------------------------------------

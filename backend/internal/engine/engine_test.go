@@ -266,3 +266,19 @@ func TestOutOfOrderEventsAreCountedByTimestamp(t *testing.T) {
 		t.Fatalf("late event counted %d, want 3", n)
 	}
 }
+
+// A late event in a saturated window must be counted before the cap trims the
+// oldest timestamp, or it loses one that is inside its own window.
+func TestLateEventInSaturatedWindowIsCountedBeforeCap(t *testing.T) {
+	sh := &shard{seen: map[string][]int64{}}
+	const window = 300_000
+	for ts := int64(1000); ts < 1030; ts++ {
+		sh.touch("ip", ts, window)
+	}
+	if n := sh.touch("ip", 1028, window); n != 30 {
+		t.Fatalf("count = %d, want 30 (1000..1028 plus itself, clamped)", n)
+	}
+	if got := len(sh.seen["ip"]); got != maxWindowEvents {
+		t.Fatalf("kept %d timestamps, want %d", got, maxWindowEvents)
+	}
+}

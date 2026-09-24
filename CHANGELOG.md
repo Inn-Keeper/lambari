@@ -11,6 +11,9 @@ Notable changes, newest first. Earlier history is in `git log`.
   the next current event scored 0 instead of 40. Windows are now sorted by
   timestamp, expire relative to the newest one, and keep the newest 30; an
   event older than the whole window is scored alone.
+- Engine: a late event in a full window is counted before the 30-entry cap
+  trims the oldest timestamp. It lost one timestamp inside its own window and
+  could miss a threshold (29 counted instead of 30 for `ip_fanout_extreme`).
 - Engine: one card's transactions are scored in the order they were
   submitted. Workers used to share one queue, so the extreme-velocity flag
   could land on an earlier transaction for the card (88 of 200 test runs);
