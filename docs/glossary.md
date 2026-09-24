@@ -78,8 +78,9 @@ hash that isn't meant to be secure.
 
 **Sliding window** — The timestamps a key was seen at within the last N
 seconds, kept sorted by timestamp and capped at the newest 30. An event counts
-what falls in the window ending at its own time; one older than the whole
-window is scored alone. `shard.touch`.
+what falls in the window ending at its own time, taken before the cap trims
+anything and limited to 30; one older than the whole window is scored alone.
+`shard.touch`.
 
 **Sweeper** — A background task that deletes keys idle for 10 minutes, every 2
 minutes. `State.StartSweeper`.
