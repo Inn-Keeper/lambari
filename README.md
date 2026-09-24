@@ -421,6 +421,8 @@ model training.
 - [docs/interview-kafka-at-least-once.md](docs/interview-kafka-at-least-once.md)
   — why at-least-once over the alternatives, where the crash windows are, and
   what the e2e test actually proves
+- [docs/glossary.md](docs/glossary.md) — the project's vocabulary: payments,
+  engine, Kafka, API and metrics terms, each pointing at the code
 - [docs/knowledge-base.md](docs/knowledge-base.md) — problem framing, stack
   decision record, scoring model, design system, runbook
 - [docs/diagrams.md](docs/diagrams.md) — UML: component, sequence, class,
