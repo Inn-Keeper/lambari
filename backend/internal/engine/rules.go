@@ -51,6 +51,13 @@ func shardFor(key string) uint32 {
 // of them. Raise it if a rule ever needs a higher threshold.
 const maxWindowEvents = 30
 
+// Velocity windows. The sweeper keeps entries exactly as long as the longest
+// one needs them.
+const (
+	cardWindowMS = 60_000
+	ipWindowMS   = 300_000
+)
+
 // touch records an event at ts for key and returns how many events fall in
 // the window ending at ts, itself included, saturating at maxWindowEvents.
 //
@@ -113,7 +120,7 @@ func RuleAmount(tx *model.Transaction, _ *State) (int, string) {
 // RuleCardVelocity: same card seen too many times inside 60s.
 func RuleCardVelocity(tx *model.Transaction, s *State) (int, string) {
 	now := tx.Timestamp.UnixMilli()
-	n := s.cardShards[shardFor(tx.CardHash)].touch(tx.CardHash, now, 60_000)
+	n := s.cardShards[shardFor(tx.CardHash)].touch(tx.CardHash, now, cardWindowMS)
 	switch {
 	case n >= 8:
 		return 50, "card_velocity_extreme"
@@ -128,7 +135,7 @@ func RuleCardVelocity(tx *model.Transaction, s *State) (int, string) {
 // *distinct cards* per IP, e.g. with a HyperLogLog per key).
 func RuleIPFanOut(tx *model.Transaction, s *State) (int, string) {
 	now := tx.Timestamp.UnixMilli()
-	total := s.ipShards[shardFor(tx.IP)].touch(tx.IP, now, 300_000)
+	total := s.ipShards[shardFor(tx.IP)].touch(tx.IP, now, ipWindowMS)
 	switch {
 	case total >= 30:
 		return 40, "ip_fanout_extreme"
@@ -191,7 +198,7 @@ func (s *State) StartSweeper(done <-chan struct{}) {
 			case <-done:
 				return
 			case <-t.C:
-				cutoff := time.Now().Add(-10 * time.Minute).UnixMilli()
+				cutoff := time.Now().UnixMilli() - ipWindowMS
 				for _, group := range [][shardCount]*shard{s.cardShards, s.ipShards} {
 					for _, sh := range group {
 						sh.mu.Lock()

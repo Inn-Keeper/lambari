@@ -82,8 +82,8 @@ what falls in the window ending at its own time, taken before the cap trims
 anything and limited to 30; one older than the whole window is scored alone.
 `shard.touch`.
 
-**Sweeper** — A background task that deletes keys idle for 10 minutes, every 2
-minutes. `State.StartSweeper`.
+**Sweeper** — A background task that, every 2 minutes, deletes keys idle for
+longer than the longest rule window (5 minutes). `State.StartSweeper`.
 
 **Worker pool** — A fixed set of goroutines (2 × CPU count) that score from
 their queues, instead of one goroutine per request. A card always goes to the
