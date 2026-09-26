@@ -1,5 +1,12 @@
 # Lambari — real-time fraud scoring pipeline (PoC)
 
+**[Live demo →](https://lambari-frontend.vercel.app)** (the API may take a moment to wake up; flip **Simulator** on to send traffic)
+
+<p>
+  <img src="docs/screenshots/dashboard.png" alt="Lambari dashboard with live throughput, decisions, review queue and rule fires" width="72%">
+  <img src="docs/screenshots/mobile.png" alt="Lambari dashboard on a phone" width="24%">
+</p>
+
 A full-stack anti-fraud proof of concept: a Go worker-pool engine that scores
 payment transactions against velocity, geo, amount, and merchant-risk rules,
 fed either over HTTP or Kafka, with a live React dashboard streaming verdicts

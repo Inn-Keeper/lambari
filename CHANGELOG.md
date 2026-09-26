@@ -9,6 +9,8 @@ Notable changes, newest first. Earlier history is in `git log`.
   each scoring rule with its threshold and points, and the decision bands.
 - Dashboard branding: a lambari fish mark, favicon, app icon, social preview,
   and Open Graph/Twitter metadata.
+- Live demo link and dashboard screenshots (desktop and mobile) at the top of
+  the README.
 
 ### Fixed
 - The live stream goes quiet when nothing changes. It used to resend the same
