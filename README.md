@@ -475,6 +475,8 @@ model training.
   engine, Kafka, API and metrics terms, each pointing at the code
 - [docs/knowledge-base.md](docs/knowledge-base.md) — problem framing, stack
   decision record, scoring model, design system, runbook
+- [docs/spec.md](docs/spec.md) — requirements: actors, use cases, user
+  flows, functional and non-functional requirements, constraints
 - [docs/diagrams.md](docs/diagrams.md) — UML: component, sequence, class,
   case-lifecycle state diagram (plain Markdown, GitHub-rendered)
 
