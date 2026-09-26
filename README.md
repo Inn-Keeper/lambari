@@ -130,6 +130,40 @@ docker rm -f lambari-redpanda
 colima stop
 ```
 
+## Deploy (Render free + Vercel)
+
+The API runs as one Docker service on Render's free plan; the dashboard stays
+on Vercel and calls it directly. The full runbook (verification, rollback,
+troubleshooting) is in [docs/deploy.md](docs/deploy.md).
+
+1. **API on Render.** Dashboard → **New → Blueprint** → pick this repo. It
+   reads [`render.yaml`](render.yaml) and asks for `LAMBARI_ALLOWED_ORIGINS`:
+   your Vercel URL, e.g. `https://lambari.vercel.app` (comma-separate several,
+   no trailing slash). Deploys follow pushes to `main`.
+2. **Dashboard on Vercel.** Project → Settings → Environment Variables → add
+   `VITE_API_BASE` = the Render URL, e.g. `https://lambari-api.onrender.com`.
+   Redeploy: Vite bakes the value in at build time.
+3. **Check it.** Open the Vercel URL; the header should read *engine live*.
+
+What the free plan means:
+
+- It sleeps after 15 minutes without traffic, and waking takes about a
+  minute. An open dashboard keeps it awake. Sleeping resets every case and
+  velocity window: they live in memory.
+- It must stay one instance. A second would split the in-memory state.
+- The API has no auth, so `render.yaml` sets demo limits: the simulator is
+  capped at 1,000 tx/s and stops itself after 10 minutes, and
+  `POST /api/transactions` is off, since it would bypass that cap. Anyone with
+  the URL can still start the simulator and resolve cases.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` / `LAMBARI_ADDR` | `:8080` | Listen address. Render sets `PORT`. |
+| `LAMBARI_ALLOWED_ORIGINS` | none | Origins that get CORS headers |
+| `LAMBARI_SIM_MAX_RATE` | `100000` | Simulator ceiling, tx/s |
+| `LAMBARI_SIM_MAX_DURATION` | none | Simulator stops itself after this, e.g. `10m` |
+| `LAMBARI_DISABLE_INGEST` | `false` | `true` answers `POST /api/transactions` with 403 |
+
 ## Kafka mode
 
 Records are keyed by card token so one card's events stay ordered within a
@@ -276,10 +310,10 @@ Three things that curve says:
 ### What actually limits it: state memory, not scoring CPU
 
 Scoring is not the wall — the engine alone does over 1M tx/s. The wall is the
-velocity state. Each transaction touches a card key and an IP key, and the
-sweeper only evicts entries older than **10 minutes**, while the rules it
-serves look back 60s (card) and 5 min (IP). Nothing reads an entry older than
-its own window, but everything is kept anyway:
+velocity state. Each transaction touches a card key and an IP key. These
+figures were measured when the sweeper kept entries for **10 minutes**, twice
+the longest rule window; it now keeps them 5 minutes, which halves retained
+state without changing its order of magnitude:
 
 - Live heap reached **2.7 GB after 18 seconds** at ~400k tx/s (`gctrace`),
   RSS 4.2 GB over a 60s run.
@@ -294,9 +328,9 @@ Caveat worth stating: the synthetic generator draws a **random card token and
 IP per transaction**, so nearly every transaction mints two new keys — the
 worst case. Real traffic repeats cards, and steady-state memory tracks
 *distinct keys inside the retention window*, not throughput. What is not an
-artifact is the shape of the bound: retention is set by the sweeper's cutoff
-rather than by the rule windows, and the process cannot sustain its own peak
-rate for even one sweep interval.
+artifact is the shape of the bound: memory grows with distinct keys over the
+retention window, and at its peak rate the process cannot hold even one sweep
+interval's worth.
 
 Both experiments in this README end at the same place. The in-memory sliding
 window is what breaks correctness when a partition moves, and what breaks
@@ -367,10 +401,11 @@ capacity when traffic is sustained.
 ### Writes must be JSON
 
 Every POST must send `Content-Type: application/json`, or it gets `415`. There
-is no auth and no CORS: a browser only sends a cross-origin JSON POST after a
-preflight, which fails, so another website can't resolve cases or start the
-simulator. The forms and `text/plain` requests it can send without one are
-rejected.
+is no auth, and CORS is granted only to `LAMBARI_ALLOWED_ORIGINS` (none by
+default). A browser only sends a cross-origin JSON POST after a preflight,
+which fails for any other origin, so another website can't resolve cases or
+start the simulator. The forms and `text/plain` requests it can send without
+a preflight are rejected.
 
 ### Backpressure at the ingest boundary
 
@@ -456,10 +491,9 @@ interesting than pretending there isn't one:
   that state costs in throughput, which is the next thing to measure.
 - **That same state is the throughput ceiling** — also measured: sustained
   load grows the live heap into the gigabytes and GC takes over long before
-  scoring runs out of CPU. The sweeper retains entries for 10 minutes to serve
-  windows of 60s and 5 min, which is a one-line tuning fix that does not change
-  the order of magnitude. Bounding the state is the actual fix, and it is the
-  same fix as the bullet above.
+  scoring runs out of CPU. Retention now matches the longest rule window (5
+  min, down from 10), which does not change the order of magnitude. Bounding
+  the state is the actual fix, and it is the same fix as the bullet above.
 - **The case store is in memory.** Cases and their labels do not survive a
   restart. `schema.sql` is the Postgres shape; the `Store` interface is the
   swap point.

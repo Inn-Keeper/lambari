@@ -9,6 +9,11 @@ export function SimControl({ sim }: { sim: SimState }) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(false);
 
+  // The slider follows the server's cap (a public deploy runs a low one).
+  const max = Math.min(20000, sim.max_rate ?? 20000);
+  const step = max >= 5000 ? 500 : 100;
+  const shown = Math.min(rate, max);
+
   // keep local state in sync when the server reports sim status
   useEffect(() => {
     setRunning(sim.running);
@@ -19,7 +24,7 @@ export function SimControl({ sim }: { sim: SimState }) {
     setRunning(on);
     setError(false);
     try {
-      await setSimulation(on ? rate : 0);
+      await setSimulation(on ? shown : 0);
     } catch (err) {
       console.error("simulator update failed", err);
       setRunning(sim.running); // revert to server-reported truth
@@ -50,14 +55,14 @@ export function SimControl({ sim }: { sim: SimState }) {
       )}
       <div className="flex items-center gap-3">
         <span className="font-mono text-sm tabular-nums text-muted">
-          {rate.toLocaleString()} tx/s
+          {shown.toLocaleString()} tx/s
         </span>
         <Slider.Root
           className="relative flex h-5 w-36 touch-none select-none items-center"
-          min={500}
-          max={20000}
-          step={500}
-          value={[rate]}
+          min={step}
+          max={max}
+          step={step}
+          value={[shown]}
           onValueChange={([v]) => setRate(v)}
           onValueCommit={([v]) => commitRate(v)}
           aria-label="Simulated transactions per second"

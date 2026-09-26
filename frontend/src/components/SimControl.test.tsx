@@ -45,4 +45,15 @@ describe("SimControl", () => {
     const bodies = f.mock.calls.map((c) => JSON.parse((c as unknown as [string, RequestInit])[1].body as string));
     expect(bodies.at(-1)).toEqual({ rate: 6500 });
   });
+
+  it("keeps the rate within the server's cap", async () => {
+    const f = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", f);
+    render(<SimControl sim={{ running: false, rate: 0, max_rate: 1000 }} />);
+
+    expect(screen.getByText("1,000 tx/s")).toBeInTheDocument(); // 5000 default, clamped
+    await userEvent.click(getSwitch());
+    const [, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ rate: 1000 });
+  });
 });

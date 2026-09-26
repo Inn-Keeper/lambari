@@ -1,5 +1,5 @@
 import { useEffect, useReducer } from "react";
-import type { Case } from "./api";
+import { API_BASE, type Case } from "./api";
 
 export type Decision = "approve" | "review" | "decline";
 
@@ -36,6 +36,8 @@ export interface Verdict {
 export interface SimState {
   running: boolean;
   rate: number;
+  /** the server's cap; absent before the first frame */
+  max_rate?: number;
 }
 
 export interface CaseCounts {
@@ -105,7 +107,7 @@ export function useStream(): StreamState {
   const [state, dispatch] = useReducer(streamReducer, initialStreamState);
 
   useEffect(() => {
-    const es = new EventSource("/api/stream");
+    const es = new EventSource(`${API_BASE}/api/stream`);
     es.onopen = () => dispatch({ type: "open" });
     es.onerror = () => dispatch({ type: "error" });
     es.onmessage = (ev) =>

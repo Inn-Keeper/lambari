@@ -52,6 +52,8 @@ Notable changes, newest first. Earlier history is in `git log`.
 - `roundCents` in the generator rounded down instead of rounding.
 
 ### Changed
+- The sweeper keeps velocity entries for 5 minutes, the longest rule window,
+  instead of 10.
 - Velocity windows keep at most 30 timestamps per key (the largest rule
   threshold). Engine benchmark: ~620–760k → ~1.2–1.5M tx/s on the same machine.
 - The SSE frame carries the top 8 open cases; the dashboard no longer polls
@@ -69,6 +71,15 @@ Notable changes, newest first. Earlier history is in `git log`.
   removed `docs/diagrams.html` (duplicate of `docs/diagrams.md`).
 
 ### Added
+- Deploy to Render's free plan: `backend/Dockerfile` (17.5 MB distroless
+  image) and a `render.yaml` Blueprint. README "Deploy" section covers Render
+  and the Vercel dashboard.
+- `LAMBARI_ALLOWED_ORIGINS`: CORS for listed origins only, preflight included.
+- Demo limits for a public deploy: `LAMBARI_SIM_MAX_RATE`,
+  `LAMBARI_SIM_MAX_DURATION` (the simulator stops itself) and
+  `LAMBARI_DISABLE_INGEST`. The API listens on `PORT` when it is set.
+- Dashboard: `VITE_API_BASE` points it at a separate backend; the simulator
+  slider follows the server's rate cap.
 - `docs/glossary.md`: the project's vocabulary, grouped by domain.
 - GitHub Actions CI: gofmt, vet and race tests; dashboard tests and build; and
   the crash-replay and rebalance experiments against a real Redpanda broker.

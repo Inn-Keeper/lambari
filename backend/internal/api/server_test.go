@@ -257,3 +257,68 @@ func TestNonJSONPostIsRejected(t *testing.T) {
 		t.Error("a text/plain POST resolved the case")
 	}
 }
+
+// ---- public-deploy limits ---------------------------------------------------
+
+func TestCORSOnlyForAllowedOrigins(t *testing.T) {
+	s := newTestServer()
+	s.SetLimits(Limits{SimMaxRate: 1000, AllowedOrigins: []string{"https://lambari.vercel.app"}})
+
+	preflight := func(origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("OPTIONS", "/api/simulate", nil)
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Access-Control-Request-Method", "POST")
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := preflight("https://lambari.vercel.app"); rec.Code != 204 ||
+		rec.Header().Get("Access-Control-Allow-Origin") != "https://lambari.vercel.app" {
+		t.Errorf("allowed origin: status %d, ACAO %q", rec.Code, rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if rec := preflight("https://evil.example"); rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Error("an origin outside the allowlist got CORS headers")
+	}
+}
+
+func TestSimulatorRateIsCapped(t *testing.T) {
+	s := newTestServer()
+	s.SetLimits(Limits{SimMaxRate: 1000})
+	req := httptest.NewRequest("POST", "/api/simulate", strings.NewReader(`{"rate":5000}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "1000") {
+		t.Errorf("status %d, body %q; want 400 naming the 1000 cap", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSimulatorStopsItselfAfterMaxDuration(t *testing.T) {
+	eng := engine.New()
+	eng.Start()
+	s := NewServer(eng, cases.NewMemStore(10), "inline")
+	s.SetLimits(Limits{SimMaxRate: 1000, SimMaxDuration: 50 * time.Millisecond})
+
+	req := httptest.NewRequest("POST", "/api/simulate", strings.NewReader(`{"rate":500}`))
+	req.Header.Set("Content-Type", "application/json")
+	s.Handler().ServeHTTP(httptest.NewRecorder(), req)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for s.simActive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("simulator still running past its max duration")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	s.StopSimulator()
+	eng.Stop()
+}
+
+func TestIngestCanBeDisabled(t *testing.T) {
+	s := newTestServer()
+	s.SetLimits(Limits{SimMaxRate: 1000, DisableIngest: true})
+	body, _ := json.Marshal([]model.Transaction{tx(0)})
+	if rec := postRaw(s, body); rec.Code != 403 {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}

@@ -2,6 +2,10 @@
 // response — callers decide how to surface it, nothing gets swallowed.
 import type { Verdict } from "./useStream";
 
+/** Backend origin, e.g. https://lambari-api.onrender.com. Empty in dev, where
+ *  Vite proxies /api to localhost:8080. */
+export const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+
 export interface Case {
   id: string;
   verdict: Verdict;
@@ -26,7 +30,7 @@ function ensureOk(res: Response, what: string): Response {
 }
 
 const post = (url: string, body: unknown, what: string) =>
-  fetch(url, {
+  fetch(API_BASE + url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

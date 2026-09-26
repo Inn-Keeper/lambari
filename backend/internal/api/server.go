@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,14 +34,31 @@ type Server struct {
 
 	// lagSource is nil in inline mode, where there is no consumer to lag.
 	lagSource func() map[int32]int64
+
+	limits Limits
 }
+
+// Limits bound what an unauthenticated caller can do on a public deploy.
+// The zero value of each field except SimMaxRate means "no limit".
+type Limits struct {
+	SimMaxRate     int64         // simulator ceiling, tx/s
+	SimMaxDuration time.Duration // simulator stops itself after this long
+	DisableIngest  bool          // POST /api/transactions answers 403
+	// AllowedOrigins get CORS headers, e.g. the Vercel dashboard. Empty means
+	// same-origin only (the Vite dev proxy).
+	AllowedOrigins []string
+}
+
+// SetLimits replaces the defaults. Call before serving.
+func (s *Server) SetLimits(l Limits) { s.limits = l }
 
 // SetLagSource wires consumer lag into the metrics endpoint. Called only in
 // Kafka mode, which keeps this package free of any Kafka import.
 func (s *Server) SetLagSource(fn func() map[int32]int64) { s.lagSource = fn }
 
 func NewServer(eng *engine.Engine, store cases.Store, mode string) *Server {
-	s := &Server{eng: eng, store: store, mux: http.NewServeMux(), mode: mode}
+	s := &Server{eng: eng, store: store, mux: http.NewServeMux(), mode: mode,
+		limits: Limits{SimMaxRate: 100_000}}
 	s.mux.HandleFunc("GET /api/health", s.health)
 	s.mux.HandleFunc("GET /api/stats", s.stats)
 	s.mux.HandleFunc("GET /api/stream", s.stream)
@@ -53,10 +71,33 @@ func NewServer(eng *engine.Engine, store cases.Store, mode string) *Server {
 	return s
 }
 
-// Handler serves same-origin only: the dashboard reaches the API through the
-// Vite proxy, so there are no CORS headers. Omitting them stops other sites
-// reading responses, not sending writes, so requireJSON guards the writes.
-func (s *Server) Handler() http.Handler { return requireJSON(s.mux) }
+// Handler serves same-origin, plus any origin in Limits.AllowedOrigins. Other
+// sites get no CORS headers, which stops them reading responses but not
+// sending writes, so requireJSON guards the writes.
+func (s *Server) Handler() http.Handler {
+	return withCORS(s.limits.AllowedOrigins, requireJSON(s.mux))
+}
+
+// withCORS answers CORS for allowlisted origins only, including the preflight
+// a JSON POST triggers.
+func withCORS(allowed []string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" && slices.Contains(allowed, origin) {
+			h := w.Header()
+			h.Set("Access-Control-Allow-Origin", origin)
+			h.Add("Vary", "Origin")
+			if r.Method == http.MethodOptions {
+				h.Set("Access-Control-Allow-Methods", "GET, POST")
+				h.Set("Access-Control-Allow-Headers", "Content-Type")
+				h.Set("Access-Control-Max-Age", "3600")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // requireJSON rejects POSTs that aren't application/json. A browser sends a
 // cross-origin JSON POST only after a CORS preflight, which fails here; the
@@ -97,6 +138,11 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 // ingest accepts a JSON array of transactions — this is the IO path an
 // external load generator (or any upstream service) hits.
 func (s *Server) ingest(w http.ResponseWriter, r *http.Request) {
+	if s.limits.DisableIngest {
+		// It would bypass the simulator cap and grow memory without bound.
+		http.Error(w, `{"error":"ingest is disabled on this deployment"}`, http.StatusForbidden)
+		return
+	}
 	var txs []model.Transaction
 	r.Body = http.MaxBytesReader(w, r.Body, maxIngestBytes)
 	if err := json.NewDecoder(r.Body).Decode(&txs); err != nil {
@@ -149,8 +195,9 @@ func (s *Server) simulate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"expected {\"rate\": <tx per second>}"}`, http.StatusBadRequest)
 		return
 	}
-	if req.Rate < 0 || req.Rate > 100_000 {
-		http.Error(w, `{"error":"rate must be between 0 and 100000"}`, http.StatusBadRequest)
+	if req.Rate < 0 || req.Rate > s.limits.SimMaxRate {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("rate must be between 0 and %d", s.limits.SimMaxRate)})
 		return
 	}
 
@@ -170,15 +217,24 @@ func (s *Server) simulate(w http.ResponseWriter, r *http.Request) {
 
 // runSimulator emits transactions in 20ms micro-batches, which keeps pacing
 // smooth at high rates without a hot spin loop.
-func (s *Server) runSimulator(stop <-chan struct{}, done chan<- struct{}) {
+func (s *Server) runSimulator(stop chan struct{}, done chan<- struct{}) {
 	defer close(done)
 	gen := model.NewGenerator(time.Now().UnixNano())
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
+	var expire <-chan time.Time // nil: never fires
+	if d := s.limits.SimMaxDuration; d > 0 {
+		expire = time.After(d)
+	}
 	for {
 		select {
 		case <-stop:
 			return
+		case <-expire:
+			expire = nil
+			// Stopping takes the lock and waits for this goroutine, so it
+			// can't run here. stopIf leaves a newer simulator alone.
+			go s.stopIf(stop)
 		case <-tick.C:
 			batch := int(s.simRate.Load() / 50) // rate per 20ms slice
 			if batch < 1 {
@@ -197,6 +253,14 @@ func (s *Server) StopSimulator() {
 	s.simMu.Lock()
 	defer s.simMu.Unlock()
 	s.stopSimulatorLocked()
+}
+
+func (s *Server) stopIf(stop chan struct{}) {
+	s.simMu.Lock()
+	defer s.simMu.Unlock()
+	if s.simStop == stop {
+		s.stopSimulatorLocked()
+	}
 }
 
 func (s *Server) stopSimulatorLocked() {
@@ -238,8 +302,9 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 				// never polls /api/cases.
 				"queue": s.store.List(cases.Open, queueInStream),
 				"sim": map[string]any{
-					"running": s.simActive.Load(),
-					"rate":    s.simRate.Load(),
+					"running":  s.simActive.Load(),
+					"rate":     s.simRate.Load(),
+					"max_rate": s.limits.SimMaxRate,
 				},
 			}
 			b, err := json.Marshal(payload)
