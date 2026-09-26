@@ -25,7 +25,7 @@ browser ──▶ Vercel (static dashboard) ──fetch/SSE──▶ Render (lam
 1. Render dashboard → **New → Blueprint** → pick this repo.
 2. Render reads `render.yaml` and prompts for `LAMBARI_ALLOWED_ORIGINS`.
    Enter the dashboard's URL, e.g. `https://lambari-frontend.vercel.app`.
-   Comma-separate several; exact match, no trailing slash, scheme included.
+   Comma-separate several; scheme included. A trailing slash is ignored.
    If the Vercel URL isn't known yet, put a placeholder and fix it in step 3.
 3. Wait for the build and for `/api/health` to go green. Note the service URL,
    e.g. `https://lambari-api.onrender.com`.
@@ -105,7 +105,7 @@ Dashboard build variable: `VITE_API_BASE` (Vercel).
 
 | Symptom | Likely cause |
 | --- | --- |
-| Dashboard stuck, console shows CORS error | Origin missing or mistyped in `LAMBARI_ALLOWED_ORIGINS` (trailing slash, `http` vs `https`, preview URL) |
+| Dashboard stuck, console shows CORS error | Origin missing or mistyped in `LAMBARI_ALLOWED_ORIGINS` (`http` vs `https`, preview URL) |
 | Dashboard calls `/api/...` on the Vercel domain (404) | `VITE_API_BASE` unset at build time; set it and redeploy |
 | First request takes ~1 min | Service was asleep |
 | Cases vanished | Service slept or redeployed; expected |

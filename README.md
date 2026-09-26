@@ -138,8 +138,7 @@ troubleshooting) is in [docs/deploy.md](docs/deploy.md).
 
 1. **API on Render.** Dashboard → **New → Blueprint** → pick this repo. It
    reads [`render.yaml`](render.yaml) and asks for `LAMBARI_ALLOWED_ORIGINS`:
-   your Vercel URL, e.g. `https://lambari-frontend.vercel.app` (comma-separate several,
-   no trailing slash). Deploys follow pushes to `main`.
+   your Vercel URL, e.g. `https://lambari-frontend.vercel.app` (comma-separate several). Deploys follow pushes to `main`.
 2. **Dashboard on Vercel.** Project → Settings → Environment Variables → add
    `VITE_API_BASE` = the Render URL, e.g. `https://lambari-api.onrender.com`.
    Redeploy: Vite bakes the value in at build time.

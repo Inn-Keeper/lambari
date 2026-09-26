@@ -152,7 +152,8 @@ func limitsFromEnv() (api.Limits, error) {
 	}
 	l.DisableIngest = os.Getenv("LAMBARI_DISABLE_INGEST") == "true"
 	for _, o := range strings.Split(os.Getenv("LAMBARI_ALLOWED_ORIGINS"), ",") {
-		if o = strings.TrimSpace(o); o != "" {
+		// Browsers send Origin without a trailing slash; a pasted URL often has one.
+		if o = strings.TrimSuffix(strings.TrimSpace(o), "/"); o != "" {
 			l.AllowedOrigins = append(l.AllowedOrigins, o)
 		}
 	}

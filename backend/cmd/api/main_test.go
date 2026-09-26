@@ -10,7 +10,7 @@ func TestLimitsFromEnv(t *testing.T) {
 	t.Setenv("LAMBARI_SIM_MAX_RATE", "1000")
 	t.Setenv("LAMBARI_SIM_MAX_DURATION", "10m")
 	t.Setenv("LAMBARI_DISABLE_INGEST", "true")
-	t.Setenv("LAMBARI_ALLOWED_ORIGINS", "https://a.vercel.app, https://b.example")
+	t.Setenv("LAMBARI_ALLOWED_ORIGINS", "https://a.vercel.app/, https://b.example")
 
 	l, err := limitsFromEnv()
 	if err != nil {

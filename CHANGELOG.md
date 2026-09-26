@@ -2,6 +2,12 @@
 
 Notable changes, newest first. Earlier history is in `git log`.
 
+## 2026-09-26
+
+### Fixed
+- `LAMBARI_ALLOWED_ORIGINS` ignores a trailing slash. Browsers send `Origin`
+  without one, so `https://x.vercel.app/` silently failed CORS.
+
 ## 2026-09-24
 
 ### Fixed
