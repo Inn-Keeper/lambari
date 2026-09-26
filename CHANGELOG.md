@@ -5,10 +5,15 @@ Notable changes, newest first. Earlier history is in `git log`.
 ## 2026-09-26
 
 ### Added
+- Collapsible "What counts as fraud?" panel on the dashboard: what fraud is,
+  each scoring rule with its threshold and points, and the decision bands.
 - Dashboard branding: a lambari fish mark, favicon, app icon, social preview,
   and Open Graph/Twitter metadata.
 
 ### Fixed
+- The live stream goes quiet when nothing changes. It used to resend the same
+  frame every 400ms even with the simulator off; now it sends a frame only on
+  change, plus an SSE comment ping every 15s to keep proxies from closing it.
 - `LAMBARI_ALLOWED_ORIGINS` ignores a trailing slash. Browsers send `Origin`
   without one, so `https://x.vercel.app/` silently failed CORS.
 

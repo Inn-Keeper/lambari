@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -320,5 +321,22 @@ func TestIngestCanBeDisabled(t *testing.T) {
 	body, _ := json.Marshal([]model.Transaction{tx(0)})
 	if rec := postRaw(s, body); rec.Code != 403 {
 		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+// An idle engine sends its state once, then goes quiet.
+func TestStreamSendsNothingWhileIdle(t *testing.T) {
+	eng := engine.New()
+	eng.Start()
+	defer eng.Stop()
+	s := NewServer(eng, cases.NewMemStore(10), "inline")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/stream", nil).WithContext(ctx))
+
+	if n := strings.Count(rec.Body.String(), "data: "); n != 1 {
+		t.Fatalf("idle stream sent %d frames in 1.5s, want 1", n)
 	}
 }

@@ -6,6 +6,7 @@ import { DecisionSplit, RuleBreakdown } from "./components/Breakdown";
 import { LiveFeed } from "./components/LiveFeed";
 import { SimControl } from "./components/SimControl";
 import { ReviewQueue } from "./components/ReviewQueue";
+import { FraudInfo } from "./components/FraudInfo";
 
 function fmtUptime(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -44,6 +45,10 @@ export default function App() {
         </div>
         <SimControl sim={sim} />
       </header>
+
+      <div className="mb-3">
+        <FraudInfo />
+      </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard

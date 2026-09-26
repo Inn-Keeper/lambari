@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -273,7 +274,9 @@ func (s *Server) stopSimulatorLocked() {
 	s.simActive.Store(false)
 }
 
-// stream pushes a stats snapshot + recent verdicts every 400ms over SSE.
+// stream pushes a stats snapshot + recent verdicts over SSE, checked every
+// 400ms but sent only when something changed: an idle engine (simulator off,
+// no ingest) goes quiet instead of repeating the same frame forever.
 func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -286,35 +289,64 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 
 	tick := time.NewTicker(400 * time.Millisecond)
 	defer tick.Stop()
+	var last []byte
+	lastWrite := time.Now()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-tick.C:
-			open, confirmed, falsePos := s.store.Counts()
-			payload := map[string]any{
-				"stats":  s.eng.Snapshot(),
-				"recent": s.eng.Recent(),
-				"cases": map[string]int64{
-					"open": open, "confirmed_fraud": confirmed, "false_positive": falsePos,
-				},
-				// The top of the review queue rides the stream, so the dashboard
-				// never polls /api/cases.
-				"queue": s.store.List(cases.Open, queueInStream),
-				"sim": map[string]any{
-					"running":  s.simActive.Load(),
-					"rate":     s.simRate.Load(),
-					"max_rate": s.limits.SimMaxRate,
-				},
-			}
-			b, err := json.Marshal(payload)
+			stats := s.eng.Snapshot()
+			uptime := stats.UptimeSec
+			stats.UptimeSec = 0 // ticks every second; not a change worth a frame
+			b, err := json.Marshal(s.frame(stats))
 			if err != nil {
+				slog.Error("marshal stream payload", "err", err)
+				continue
+			}
+			if bytes.Equal(b, last) {
+				// An SSE comment: EventSource ignores it, but it keeps proxies
+				// from closing a connection that has gone quiet.
+				if time.Since(lastWrite) >= streamKeepAlive {
+					fmt.Fprint(w, ": ping\n\n")
+					flusher.Flush()
+					lastWrite = time.Now()
+				}
+				continue
+			}
+			last = b
+			stats.UptimeSec = uptime
+			if b, err = json.Marshal(s.frame(stats)); err != nil {
 				slog.Error("marshal stream payload", "err", err)
 				continue
 			}
 			fmt.Fprintf(w, "data: %s\n\n", b)
 			flusher.Flush()
+			lastWrite = time.Now()
 		}
+	}
+}
+
+// streamKeepAlive is how long an idle stream waits before sending a ping.
+const streamKeepAlive = 15 * time.Second
+
+// frame is one SSE payload.
+func (s *Server) frame(stats engine.Stats) map[string]any {
+	open, confirmed, falsePos := s.store.Counts()
+	return map[string]any{
+		"stats":  stats,
+		"recent": s.eng.Recent(),
+		"cases": map[string]int64{
+			"open": open, "confirmed_fraud": confirmed, "false_positive": falsePos,
+		},
+		// The top of the review queue rides the stream, so the dashboard
+		// never polls /api/cases.
+		"queue": s.store.List(cases.Open, queueInStream),
+		"sim": map[string]any{
+			"running":  s.simActive.Load(),
+			"rate":     s.simRate.Load(),
+			"max_rate": s.limits.SimMaxRate,
+		},
 	}
 }
 
