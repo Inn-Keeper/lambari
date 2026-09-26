@@ -24,7 +24,7 @@ browser ──▶ Vercel (static dashboard) ──fetch/SSE──▶ Render (lam
 
 1. Render dashboard → **New → Blueprint** → pick this repo.
 2. Render reads `render.yaml` and prompts for `LAMBARI_ALLOWED_ORIGINS`.
-   Enter the dashboard's URL, e.g. `https://lambari.vercel.app`.
+   Enter the dashboard's URL, e.g. `https://lambari-frontend.vercel.app`.
    Comma-separate several; exact match, no trailing slash, scheme included.
    If the Vercel URL isn't known yet, put a placeholder and fix it in step 3.
 3. Wait for the build and for `/api/health` to go green. Note the service URL,
@@ -49,7 +49,7 @@ the service on save.
 
 ```bash
 API=https://lambari-api.onrender.com
-WEB=https://lambari.vercel.app
+WEB=https://lambari-frontend.vercel.app
 
 curl -s $API/api/health                                   # 200
 curl -si -H "Origin: $WEB" $API/api/stats | grep -i access-control-allow-origin

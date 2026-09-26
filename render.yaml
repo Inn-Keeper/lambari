@@ -18,7 +18,7 @@ services:
         value: 10m
       - key: LAMBARI_DISABLE_INGEST
         value: "true"
-      # Your Vercel URL(s), comma-separated, e.g. https://lambari.vercel.app.
+      # Your Vercel URL(s), comma-separated, e.g. https://lambari-frontend.vercel.app.
       # Asked for when the Blueprint is created.
       - key: LAMBARI_ALLOWED_ORIGINS
         sync: false

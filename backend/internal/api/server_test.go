@@ -262,7 +262,7 @@ func TestNonJSONPostIsRejected(t *testing.T) {
 
 func TestCORSOnlyForAllowedOrigins(t *testing.T) {
 	s := newTestServer()
-	s.SetLimits(Limits{SimMaxRate: 1000, AllowedOrigins: []string{"https://lambari.vercel.app"}})
+	s.SetLimits(Limits{SimMaxRate: 1000, AllowedOrigins: []string{"https://lambari-frontend.vercel.app"}})
 
 	preflight := func(origin string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("OPTIONS", "/api/simulate", nil)
@@ -272,8 +272,8 @@ func TestCORSOnlyForAllowedOrigins(t *testing.T) {
 		s.Handler().ServeHTTP(rec, req)
 		return rec
 	}
-	if rec := preflight("https://lambari.vercel.app"); rec.Code != 204 ||
-		rec.Header().Get("Access-Control-Allow-Origin") != "https://lambari.vercel.app" {
+	if rec := preflight("https://lambari-frontend.vercel.app"); rec.Code != 204 ||
+		rec.Header().Get("Access-Control-Allow-Origin") != "https://lambari-frontend.vercel.app" {
 		t.Errorf("allowed origin: status %d, ACAO %q", rec.Code, rec.Header().Get("Access-Control-Allow-Origin"))
 	}
 	if rec := preflight("https://evil.example"); rec.Header().Get("Access-Control-Allow-Origin") != "" {
