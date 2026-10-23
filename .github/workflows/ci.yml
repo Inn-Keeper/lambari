@@ -60,3 +60,31 @@ jobs:
           exit 1
       - run: make e2e
       - run: make rebalance
+
+  # Ships the API image and hands the rollout to Inn-Keeper/theplatform (dev, then prd on approval).
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, kafka]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: backend
+          push: true
+          tags: ghcr.io/inn-keeper/lambari-api:sha-${{ github.sha }}
+      - name: Trigger platform deploy
+        env:
+          GH_TOKEN: ${{ secrets.PLATFORM_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/Inn-Keeper/theplatform/dispatches \
+            -f event_type=lambari-release \
+            -f "client_payload[tag]=sha-${{ github.sha }}"
