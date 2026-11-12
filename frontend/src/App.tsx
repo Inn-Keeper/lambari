@@ -84,7 +84,7 @@ export default function App() {
       </div>
 
       <div className="mt-3 grid gap-3 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div className="min-w-0 lg:col-span-2">
           <ThroughputChart history={rateHistory} current={stats?.rate_per_sec ?? 0} />
         </div>
         <div className="space-y-3">
@@ -97,7 +97,7 @@ export default function App() {
       </div>
 
       <div className="mt-3 grid gap-3 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div className="min-w-0 lg:col-span-2">
           <LiveFeed verdicts={recent} />
         </div>
         <div>{stats && <RuleBreakdown stats={stats} />}</div>

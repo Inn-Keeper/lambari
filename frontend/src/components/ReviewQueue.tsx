@@ -1,5 +1,5 @@
 import { useEffect, useReducer } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import { HttpError, resolveCase, type Case, type Resolution } from "../lib/api";
 import { casesReducer, initialQueueState } from "../lib/casesReducer";
 import type { CaseCounts } from "../lib/useStream";
@@ -85,56 +85,55 @@ export function ReviewQueue({ counts, queue }: { counts: CaseCounts; queue: Case
         </p>
       ) : (
         <div className="mt-3 space-y-2">
-          <AnimatePresence initial={false}>
-            {state.cases.map((c) => {
-              const v = c.verdict;
-              const isDecline = v.decision === "decline";
-              return (
-                <motion.div
-                  key={c.id}
-                  layout
-                  initial={{ opacity: 0, y: -6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, x: 24 }}
-                  transition={{ duration: 0.2 }}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-line bg-panel-2 px-3 py-2"
+          {/* No exit animation: a leaving row that lingers keeps its height and
+              the panel bounces. */}
+          {state.cases.map((c) => {
+            const v = c.verdict;
+            const isDecline = v.decision === "decline";
+            return (
+              <motion.div
+                key={c.id}
+                layout
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.2 }}
+                className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-line bg-panel-2 px-3 py-2"
+              >
+                <span
+                  className={`font-mono text-sm font-semibold tabular-nums ${
+                    isDecline ? "text-decline" : "text-review"
+                  }`}
                 >
-                  <span
-                    className={`font-mono text-sm font-semibold tabular-nums ${
-                      isDecline ? "text-decline" : "text-review"
-                    }`}
+                  {v.score}
+                </span>
+                <span className="font-mono text-sm tabular-nums">
+                  {v.amount.toFixed(2)} {v.currency}
+                </span>
+                <span className="font-mono text-xs text-muted">
+                  {v.card_bin}·· {v.country}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-xs text-faint">
+                  {(v.flags ?? []).join(", ")}
+                </span>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => resolve(c.id, "confirmed_fraud")}
+                    disabled={state.busy !== null}
+                    className="rounded border border-decline/40 px-2 py-1 text-xs font-medium text-decline transition-colors hover:bg-decline/10 focus-visible:ring-2 focus-visible:ring-decline focus:outline-none disabled:opacity-50"
                   >
-                    {v.score}
-                  </span>
-                  <span className="font-mono text-sm tabular-nums">
-                    {v.amount.toFixed(2)} {v.currency}
-                  </span>
-                  <span className="font-mono text-xs text-muted">
-                    {v.card_bin}·· {v.country}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-xs text-faint">
-                    {(v.flags ?? []).join(", ")}
-                  </span>
-                  <div className="flex gap-1.5">
-                    <button
-                      onClick={() => resolve(c.id, "confirmed_fraud")}
-                      disabled={state.busy !== null}
-                      className="rounded border border-decline/40 px-2 py-1 text-xs font-medium text-decline transition-colors hover:bg-decline/10 focus-visible:ring-2 focus-visible:ring-decline focus:outline-none disabled:opacity-50"
-                    >
-                      Confirm fraud
-                    </button>
-                    <button
-                      onClick={() => resolve(c.id, "false_positive")}
-                      disabled={state.busy !== null}
-                      className="rounded border border-approve/40 px-2 py-1 text-xs font-medium text-approve transition-colors hover:bg-approve/10 focus-visible:ring-2 focus-visible:ring-approve focus:outline-none disabled:opacity-50"
-                    >
-                      Clear
-                    </button>
-                  </div>
-                </motion.div>
-              );
-            })}
-          </AnimatePresence>
+                    Confirm fraud
+                  </button>
+                  <button
+                    onClick={() => resolve(c.id, "false_positive")}
+                    disabled={state.busy !== null}
+                    className="rounded border border-approve/40 px-2 py-1 text-xs font-medium text-approve transition-colors hover:bg-approve/10 focus-visible:ring-2 focus-visible:ring-approve focus:outline-none disabled:opacity-50"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </motion.div>
+            );
+          })}
         </div>
       )}
     </div>
