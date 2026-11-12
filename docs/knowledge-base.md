@@ -12,10 +12,13 @@ processing problem**: score thousands of payment transactions per second
 against rules (and eventually models), decide approve / review / decline,
 and surface flagged traffic to analysts fast enough to act on it.
 
-The scoring path has a latency budget measured in microseconds-to-milliseconds
-because it sits inline with payment authorization. Everything else (case
-review, analytics, model training) is asynchronous and rides downstream of
-the verdict stream.
+As built this is **post-authorization monitoring**, not an authorization
+gate: no caller receives a verdict back, so a `decline` is a severity band
+for the review queue rather than a blocked payment (see the README's
+[production deltas](../README.md#where-this-would-go-next-production-deltas)).
+Scoring is kept in the microsecond range so that it could sit inline with
+authorization later. Everything else (case review, analytics, model training)
+is asynchronous and rides downstream of the verdict stream.
 
 ## 2. Stack decision record
 
@@ -29,7 +32,7 @@ the verdict stream.
 | Broker | **Redpanda** (docker-compose) | Kafka-API compatible, single binary, no ZooKeeper/JVM. Dev friction ≈ zero. |
 | Frontend | **React 19 + TypeScript 5.7 + Vite 6** | |
 | Styling | **Tailwind CSS v4** (CSS-first `@theme` tokens) | No `tailwind.config.js`; design tokens live in `index.css`. |
-| Motion | **motion v12** (`motion/react`) | Feed entry/exit animations, animated bars. Successor package to framer-motion. |
+| Motion | **motion v12** (`motion/react`) | Feed entry animations, animated bars. Successor package to framer-motion. |
 | Primitives | **Radix UI** (Slider, Switch) | Accessible controls without adopting a full component library. |
 | Live updates | **Server-Sent Events** | One-directional stats push; simpler than WebSocket, auto-reconnects natively. 400ms tick. |
 | Persistence (PoC) | In-memory behind `cases.Store` interface | `schema.sql` defines the identical Postgres shape; swap = one new implementation, zero handler changes. |

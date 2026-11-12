@@ -12,6 +12,11 @@ payment transactions against velocity, geo, amount, and merchant-risk rules,
 fed either over HTTP or Kafka, with a live React dashboard streaming verdicts
 over SSE.
 
+It monitors transactions after the fact: nothing sends a verdict back to the
+caller, so `decline` ranks a case rather than blocking a payment. The simulator
+labels its own fraud, and the dashboard shows how much of it the rules caught
+(recall) and how much of what they flagged was fraud (precision).
+
 **Measured on a Mac mini M1 (8 cores, 16 GB)** — a developer laptop, not a tuned
 deployment. Every figure is what the server *kept*; shed load is counted
 separately and never folded into the rate.
@@ -41,7 +46,9 @@ separately and never folded into the rate.
 Stage-by-stage figures: [Throughput ceiling (measured)](#throughput-ceiling-measured).
 
 Includes **case management**: every review/decline verdict opens a case in
-a review queue (worst score first). Analyst resolutions — confirmed fraud
+a review queue (worst score first; when it is full the lowest score is
+evicted, oldest first). Each case keeps the scored transaction, so a label
+comes with its features. Analyst resolutions — confirmed fraud
 or false positive — are stored as labels, i.e. training data for a future
 ML rule. In-memory for the PoC behind a `Store` interface; `schema.sql`
 defines the identical Postgres shape.
@@ -502,6 +509,11 @@ interesting than pretending there isn't one:
   scoring runs out of CPU. Retention now matches the longest rule window (5
   min, down from 10), which does not change the order of magnitude. Bounding
   the state is the actual fix, and it is the same fix as the bullet above.
+- **Nobody receives the verdict.** `POST /api/transactions` answers with
+  counts, and the `verdicts` topic carries flagged verdicts only. Gating an
+  authorization needs a synchronous verdict in the ingest response, or every
+  verdict published — and either one moves the throughput figures above, so it
+  has to be re-measured rather than assumed.
 - **The case store is in memory.** Cases and their labels do not survive a
   restart. `schema.sql` is the Postgres shape; the `Store` interface is the
   swap point.

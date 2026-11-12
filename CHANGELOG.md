@@ -2,6 +2,30 @@
 
 Notable changes, newest first. Earlier history is in `git log`.
 
+## 2026-11-12
+
+### Added
+- Detection quality on the dashboard. The simulator labels each transaction
+  `fraud` or `legit`, the engine counts labelled outcomes (`labeled_fraud`,
+  `fraud_caught`, `legit_flagged` in the stats), and a "Fraud caught" card
+  shows recall and precision. It replaces the "Processed" card.
+- Cases keep the scored transaction (`tx`), in the API and in `schema.sql`, so
+  an analyst's label comes with the features a model would train on.
+
+### Changed
+- A full review queue evicts the lowest score, oldest first, instead of the
+  oldest case whatever its score.
+- `Store.Open` and `Engine.OnFlagged` take the transaction as well as the
+  verdict.
+- Docs describe the PoC as post-authorization monitoring: no caller receives a
+  verdict.
+
+### Fixed
+- The review queue and live feed no longer change height as rows leave, which
+  pushed the rest of the page up and down.
+- The dashboard no longer scrolls sideways on a phone, and the card BIN and
+  country stay on one line in the live feed.
+
 ## 2026-09-26
 
 ### Added
