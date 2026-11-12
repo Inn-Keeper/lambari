@@ -515,10 +515,28 @@ interesting than pretending there isn't one:
   verdict published — and either one moves the throughput figures above, so it
   has to be re-measured rather than assumed.
 - **The case store is in memory.** Cases and their labels do not survive a
-  restart. `schema.sql` is the Postgres shape; the `Store` interface is the
-  swap point.
-- Swap `cases.MemStore` for a pgx implementation of `cases.Store`
-  (`schema.sql` is ready)
+  restart. Deliberately left that way for now; the plan when it changes is
+  below.
+- **Planned: persist resolved cases in Postgres** (Neon is the candidate: plain
+  Postgres, so `schema.sql` applies as written, and a free tier that scales to
+  zero like the API host does). The constraints that shape it:
+  - *Resolved cases only.* The open queue stays in memory. At 1,000 tx/s it
+    takes about 60 new cases a second and holds 200, so persisting it means
+    millions of rows a day against a 0.5 GB free tier, and a network write on
+    the scoring workers, whose `OnFlagged` hook has to stay non-blocking.
+  - *One synchronous write per analyst resolution* (verdict, transaction,
+    label, timestamps). The resolved counts and history are read back from the
+    database, so labels survive a restart or a sleep.
+  - *Opt-in.* With `DATABASE_URL` unset the store is `cases.MemStore`, so local
+    runs and tests need no database. The connection string is a secret: set on
+    the host, never logged or committed.
+  - *One new Go dependency* (pgx), which ends the backend's single-dependency
+    rule and needs saying where that rule is stated.
+  - *Dedupe stays partial.* A replay after a restart can still reopen a case
+    that was already resolved; the second resolve then fails on the primary
+    key. [Delivery semantics](#delivery-semantics) would have to say so.
+  - *No auth.* Anyone with the URL can write label rows by resolving cases, so
+    a public deploy needs auth or a row cap before this ships.
 - A Python sidecar serving an ML model as one more `Rule` in the chain,
   trained on the resolution labels the queue already collects
 - Kubernetes with KEDA scaling on the exported consumer-lag metric, capped at

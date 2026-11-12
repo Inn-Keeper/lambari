@@ -19,6 +19,8 @@ Notable changes, newest first. Earlier history is in `git log`.
   verdict.
 - Docs describe the PoC as post-authorization monitoring: no caller receives a
   verdict.
+- README records the plan and constraints for persisting resolved cases in
+  Postgres (Neon). Not implemented: the case store stays in memory.
 
 ### Fixed
 - The review queue and live feed no longer change height as rows leave, which
