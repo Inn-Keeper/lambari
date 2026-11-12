@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatLatencyBound, LATENCY_OVERFLOW } from "./format";
+import { formatLatencyBound, formatShare, LATENCY_OVERFLOW } from "./format";
+
+describe("formatShare", () => {
+  it("rounds to a whole percent and dashes an empty denominator", () => {
+    expect(formatShare(2, 3)).toBe("67%");
+    expect(formatShare(0, 0)).toBe("—");
+  });
+});
 
 describe("formatLatencyBound", () => {
   // The backend sends bucket bounds. Rendering 100000 as "100,000µs" claims a

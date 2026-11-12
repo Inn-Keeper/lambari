@@ -17,7 +17,16 @@ type Transaction struct {
 	MerchantID string    `json:"merchant_id"`
 	MCC        string    `json:"mcc"` // merchant category code
 	Timestamp  time.Time `json:"timestamp"`
+	// Label is ground truth, set only by the synthetic generator. Rules never
+	// read it; the engine uses it to measure what they caught and what they
+	// missed. Real traffic leaves it empty and is left out of those counts.
+	Label string `json:"label,omitempty"`
 }
+
+const (
+	LabelFraud = "fraud"
+	LabelLegit = "legit"
+)
 
 // BINCountry maps a card BIN to its issuing country. A toy table for the PoC;
 // production would use a licensed BIN database.

@@ -41,6 +41,13 @@ type Engine struct {
 	// arrived.
 	rejected atomic.Int64
 
+	// Outcomes for transactions that carry a ground-truth label (simulator
+	// traffic). Recall = fraudCaught/labeledFraud, precision =
+	// fraudCaught/(fraudCaught+legitFlagged).
+	labeledFraud atomic.Int64
+	fraudCaught  atomic.Int64
+	legitFlagged atomic.Int64
+
 	// per-rule fire counts
 	ruleMu    sync.Mutex
 	ruleFires map[string]int64
@@ -203,6 +210,19 @@ func (e *Engine) score(tx *model.Transaction) {
 		e.declined.Add(1)
 	}
 
+	flagged := decision != model.Approve
+	switch tx.Label {
+	case model.LabelFraud:
+		e.labeledFraud.Add(1)
+		if flagged {
+			e.fraudCaught.Add(1)
+		}
+	case model.LabelLegit:
+		if flagged {
+			e.legitFlagged.Add(1)
+		}
+	}
+
 	if len(flags) > 0 {
 		e.ruleMu.Lock()
 		for _, f := range flags {
@@ -213,12 +233,12 @@ func (e *Engine) score(tx *model.Transaction) {
 
 	e.lat.observe(lat)
 
-	if decision != model.Approve && e.onFlagged != nil {
+	if flagged && e.onFlagged != nil {
 		e.onFlagged(v)
 	}
 
 	// keep flagged verdicts (and a trickle of approvals) for the live feed
-	if decision != model.Approve || pn%97 == 0 {
+	if flagged || pn%97 == 0 {
 		e.ringMu.Lock()
 		e.ring[e.ringAt] = v
 		e.ringAt = (e.ringAt + 1) % ringSize
@@ -244,12 +264,16 @@ func (e *Engine) rateTicker() {
 // ---- read side ------------------------------------------------------------
 
 type Stats struct {
-	Processed  int64 `json:"processed"`
-	Approved   int64 `json:"approved"`
-	Reviewed   int64 `json:"reviewed"`
-	Declined   int64 `json:"declined"`
-	Rejected   int64 `json:"rejected"` // shed: buffer was full
-	RatePerSec int64 `json:"rate_per_sec"`
+	Processed int64 `json:"processed"`
+	Approved  int64 `json:"approved"`
+	Reviewed  int64 `json:"reviewed"`
+	Declined  int64 `json:"declined"`
+	Rejected  int64 `json:"rejected"` // shed: buffer was full
+	// Ground-truth outcomes, counted only for labelled (simulator) traffic.
+	LabeledFraud int64 `json:"labeled_fraud"` // fraud transactions seen
+	FraudCaught  int64 `json:"fraud_caught"`  // of those, flagged
+	LegitFlagged int64 `json:"legit_flagged"` // legitimate ones flagged anyway
+	RatePerSec   int64 `json:"rate_per_sec"`
 	// P50US/P99US are histogram bucket *upper bounds*, not exact latencies:
 	// 100000 means "in (10ms, 100ms]". Overflow (-1) means slower than the
 	// largest bucket, 0 means nothing scored yet. Anything rendering these has
@@ -289,9 +313,11 @@ func (e *Engine) Snapshot() Stats {
 
 	return Stats{
 		Processed: p, Approved: e.approved.Load(), Reviewed: rev, Declined: dec,
-		Rejected:   e.rejected.Load(),
-		RatePerSec: e.lastRate.Load(),
-		P50US:      lat.Quantile(0.50), P99US: lat.Quantile(0.99),
+		Rejected:     e.rejected.Load(),
+		LabeledFraud: e.labeledFraud.Load(), FraudCaught: e.fraudCaught.Load(),
+		LegitFlagged: e.legitFlagged.Load(),
+		RatePerSec:   e.lastRate.Load(),
+		P50US:        lat.Quantile(0.50), P99US: lat.Quantile(0.99),
 		QueueDepth: depth, QueueCap: capacity,
 		UptimeSec: int64(time.Since(e.startedAt).Seconds()),
 		RuleFires: fires, FlaggedRate: flagged,

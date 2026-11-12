@@ -10,3 +10,8 @@ export function formatLatencyBound(us: number | undefined): string {
   if (us === LATENCY_OVERFLOW) return "off scale";
   return `≤${us.toLocaleString()}µs`;
 }
+
+/** A share as a whole percent, or a dash when there is nothing to divide by. */
+export function formatShare(part: number, whole: number): string {
+  return whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—";
+}

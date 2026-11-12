@@ -282,3 +282,26 @@ func TestLateEventInSaturatedWindowIsCountedBeforeCap(t *testing.T) {
 		t.Fatalf("kept %d timestamps, want %d", got, maxWindowEvents)
 	}
 }
+
+// Labelled traffic is the only way to tell a rule set that flags the right
+// 6% from one that flags the wrong 6%.
+func TestLabelledOutcomesAreCounted(t *testing.T) {
+	e := New()
+	e.Start()
+	now := time.Now()
+	tx := func(id, label string, amount float64) model.Transaction {
+		return model.Transaction{ID: id, CardHash: id, IP: id, Amount: amount, Timestamp: now, Label: label}
+	}
+	e.SubmitBatch([]model.Transaction{
+		tx("caught", model.LabelFraud, 6000),      // amount_extreme: review
+		tx("missed", model.LabelFraud, 10),        // approve
+		tx("false_alarm", model.LabelLegit, 6000), // review
+		tx("unlabelled", "", 6000),                // review, not counted
+	})
+	e.Stop()
+
+	s := e.Snapshot()
+	if s.LabeledFraud != 2 || s.FraudCaught != 1 || s.LegitFlagged != 1 {
+		t.Fatalf("fraud=%d caught=%d legitFlagged=%d, want 2, 1, 1", s.LabeledFraud, s.FraudCaught, s.LegitFlagged)
+	}
+}

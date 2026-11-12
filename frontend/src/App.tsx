@@ -1,5 +1,5 @@
 import { useStream } from "./lib/useStream";
-import { formatLatencyBound } from "./lib/format";
+import { formatLatencyBound, formatShare } from "./lib/format";
 import { StatCard } from "./components/StatCard";
 import { ThroughputChart } from "./components/ThroughputChart";
 import { DecisionSplit, RuleBreakdown } from "./components/Breakdown";
@@ -61,10 +61,14 @@ export default function App() {
           }
           tone={stats?.rejected ? "warn" : "default"}
         />
+        {/* Recall on the simulator's own labels; real traffic has none. */}
         <StatCard
-          label="Processed"
-          value={(stats?.processed ?? 0).toLocaleString()}
-          hint="since engine start"
+          label="Fraud caught"
+          value={formatShare(stats?.fraud_caught ?? 0, stats?.labeled_fraud ?? 0)}
+          hint={`of simulated fraud · precision ${formatShare(
+            stats?.fraud_caught ?? 0,
+            (stats?.fraud_caught ?? 0) + (stats?.legit_flagged ?? 0),
+          )}`}
         />
         <StatCard
           label="Flagged"

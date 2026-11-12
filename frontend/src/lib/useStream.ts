@@ -10,6 +10,10 @@ export interface Stats {
   declined: number;
   /** shed at ingest because the engine's buffer was full */
   rejected: number;
+  /** ground truth, simulator traffic only: fraud seen, fraud flagged, legit flagged */
+  labeled_fraud: number;
+  fraud_caught: number;
+  legit_flagged: number;
   rate_per_sec: number;
   p50_us: number;
   p99_us: number;

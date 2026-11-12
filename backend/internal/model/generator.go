@@ -50,8 +50,12 @@ func (g *Generator) Next() Transaction {
 		MerchantID: fmt.Sprintf("m_%03d", g.rng.Intn(400)),
 		MCC:        lowRiskMCCs[g.rng.Intn(len(lowRiskMCCs))],
 		Timestamp:  time.Now(),
+		Label:      LabelLegit,
 	}
 
+	if r < 0.10 {
+		tx.Label = LabelFraud
+	}
 	switch {
 	case r < 0.03: // card-testing ring: hot IP, small amounts, many cards
 		tx.IP = g.hotIPs[g.rng.Intn(len(g.hotIPs))]
