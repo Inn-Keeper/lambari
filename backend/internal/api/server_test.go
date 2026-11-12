@@ -241,7 +241,7 @@ func TestStopSimulatorBeforeEngineStopDoesNotPanic(t *testing.T) {
 // reach the handler. It must not be able to resolve a case.
 func TestNonJSONPostIsRejected(t *testing.T) {
 	store := cases.NewMemStore(10)
-	store.Open(model.Verdict{TxID: "tx_1", Score: 50, Decision: model.Review})
+	store.Open(model.Verdict{TxID: "tx_1", Score: 50, Decision: model.Review}, model.Transaction{})
 	s := NewServer(engine.New(), store, "inline")
 
 	req := httptest.NewRequest("POST", "/api/cases/tx_1/resolve",

@@ -201,7 +201,7 @@ func TestOneCardIsScoredInSubmissionOrder(t *testing.T) {
 	e := New()
 	var mu sync.Mutex
 	var extreme []string
-	e.OnFlagged(func(v model.Verdict) {
+	e.OnFlagged(func(v model.Verdict, _ model.Transaction) {
 		for _, f := range v.Flags {
 			if f == "card_velocity_extreme" {
 				mu.Lock()

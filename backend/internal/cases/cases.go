@@ -32,26 +32,30 @@ const (
 )
 
 type Case struct {
-	ID         string        `json:"id"` // = tx_id, 1:1 for the PoC
-	Verdict    model.Verdict `json:"verdict"`
-	Status     Status        `json:"status"`
-	Resolution Resolution    `json:"resolution,omitempty"`
-	OpenedAt   int64         `json:"opened_at"`
-	ResolvedAt int64         `json:"resolved_at,omitempty"`
+	ID      string        `json:"id"` // = tx_id, 1:1 for the PoC
+	Verdict model.Verdict `json:"verdict"`
+	// Tx is the transaction that was scored: the features a model would train
+	// on. The verdict alone only says what the rules already concluded.
+	Tx         model.Transaction `json:"tx"`
+	Status     Status            `json:"status"`
+	Resolution Resolution        `json:"resolution,omitempty"`
+	OpenedAt   int64             `json:"opened_at"`
+	ResolvedAt int64             `json:"resolved_at,omitempty"`
 }
 
 var ErrNotFound = errors.New("case not found")
 
 // Store is the swap point for Postgres later.
 type Store interface {
-	Open(v model.Verdict)
+	Open(v model.Verdict, tx model.Transaction)
 	List(status Status, limit int) []Case
 	Resolve(id string, r Resolution) (Case, error)
 	Counts() (open, confirmed, falsePos int64)
 }
 
-// MemStore keeps the newest maxOpen open cases; older unreviewed ones are
-// evicted (at 5k tx/s you triage by recency or you drown). Resolved cases
+// MemStore keeps at most maxOpen open cases. Over that it evicts the lowest
+// score, oldest first among equals, so the queue never drops a worse case to
+// keep a milder one. Resolved cases
 // move to a capped history so memory stays bounded on long runs — the
 // permanent record is Postgres's job, not this store's.
 type MemStore struct {
@@ -70,17 +74,25 @@ func NewMemStore(maxOpen int) *MemStore {
 // Open creates a case for a flagged verdict, ignoring a duplicate while that
 // case is still open. Once it is resolved or evicted the TxID is forgotten and a
 // replay reopens it; a Postgres store (tx_id primary key) would dedupe for good.
-func (s *MemStore) Open(v model.Verdict) {
+func (s *MemStore) Open(v model.Verdict, tx model.Transaction) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.open[v.TxID]; exists {
 		return
 	}
-	s.open[v.TxID] = &Case{ID: v.TxID, Verdict: v, Status: Open, OpenedAt: time.Now().UnixMilli()}
+	s.open[v.TxID] = &Case{ID: v.TxID, Verdict: v, Tx: tx, Status: Open, OpenedAt: time.Now().UnixMilli()}
 	s.openIDs = append(s.openIDs, v.TxID)
 	if len(s.openIDs) > s.maxOpen {
-		delete(s.open, s.openIDs[0])
-		s.openIDs = s.openIDs[1:]
+		// Linear, but the list is at most maxOpen+1 long. Strict < keeps the
+		// oldest of the lowest scores as the one to go.
+		evict := 0
+		for i, id := range s.openIDs {
+			if s.open[id].Verdict.Score < s.open[s.openIDs[evict]].Verdict.Score {
+				evict = i
+			}
+		}
+		delete(s.open, s.openIDs[evict])
+		s.openIDs = slices.Delete(s.openIDs, evict, evict+1)
 	}
 }
 

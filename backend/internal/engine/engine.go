@@ -63,7 +63,7 @@ type Engine struct {
 
 	// optional hook invoked for every non-approve verdict (case opening,
 	// Kafka verdict publishing). Set before Start; not synchronized after.
-	onFlagged func(model.Verdict)
+	onFlagged func(model.Verdict, model.Transaction)
 
 	// rolling throughput: processed count snapshots per second
 	lastSnap  atomic.Int64
@@ -104,7 +104,7 @@ func New() *Engine {
 // OnFlagged registers a callback fired for every review/decline verdict.
 // Must be called before Start. The callback runs on worker goroutines, so
 // it has to be fast and non-blocking.
-func (e *Engine) OnFlagged(fn func(model.Verdict)) {
+func (e *Engine) OnFlagged(fn func(model.Verdict, model.Transaction)) {
 	e.onFlagged = fn
 }
 
@@ -234,7 +234,7 @@ func (e *Engine) score(tx *model.Transaction) {
 	e.lat.observe(lat)
 
 	if flagged && e.onFlagged != nil {
-		e.onFlagged(v)
+		e.onFlagged(v, *tx)
 	}
 
 	// keep flagged verdicts (and a trickle of approvals) for the live feed

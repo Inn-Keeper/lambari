@@ -59,7 +59,7 @@ sequenceDiagram
     W->>W: run rule chain, sum score
     W->>W: Decide(score) -> approve/review/decline
     alt review or decline
-        W->>S: OnFlagged(verdict) -> Open(case)
+        W->>S: OnFlagged(verdict, tx) -> Open(case)
     end
     W-->>E: Verdict recorded (atomics, latency histogram)
     loop every 400ms
@@ -159,7 +159,7 @@ classDiagram
 
     class Store {
         <<interface>>
-        +Open(v Verdict)
+        +Open(v Verdict, tx Transaction)
         +List(status, limit) []Case
         +Resolve(id, r) (Case, error)
         +Counts() (open, confirmed, falsePos int64)
@@ -169,7 +169,7 @@ classDiagram
         -map~string,Case~ open
         -[]string openIDs
         +NewMemStore(maxOpen) MemStore
-        +Open(v Verdict)
+        +Open(v Verdict, tx Transaction)
         +List(status, limit) []Case
         +Resolve(id, r) (Case, error)
         +Counts() (int64, int64, int64)

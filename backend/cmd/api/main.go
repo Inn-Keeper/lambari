@@ -77,8 +77,8 @@ func main() {
 
 	// every flagged verdict opens a case; in kafka mode it's also published
 	// downstream on the verdicts topic.
-	eng.OnFlagged(func(v model.Verdict) {
-		store.Open(v)
+	eng.OnFlagged(func(v model.Verdict, tx model.Transaction) {
+		store.Open(v, tx)
 		if verdictPub != nil {
 			// WithoutCancel: a verdict buffered during shutdown must still be
 			// published — the revoke hook on Close commits the batch it came from.

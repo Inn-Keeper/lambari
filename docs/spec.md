@@ -140,7 +140,7 @@ sequenceDiagram
         loop every 20 ms until stopped or SimMaxDuration
             API->>E: Submit(r/50 synthetic tx)
             E->>E: rules → score → decision
-            E->>S: Open(verdict) if review/decline
+            E->>S: Open(verdict, tx) if review/decline
         end
         loop every 400 ms
             API-->>UI: SSE frame (stats, verdicts, top cases, max_rate)

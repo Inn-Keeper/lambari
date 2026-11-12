@@ -8,6 +8,7 @@ CREATE TYPE case_resolution AS ENUM ('confirmed_fraud', 'false_positive');
 CREATE TABLE cases (
     id          text PRIMARY KEY,               -- = tx_id
     verdict     jsonb NOT NULL,                 -- full scored verdict
+    tx          jsonb NOT NULL,                 -- the scored transaction: the features a model trains on
     score       int  GENERATED ALWAYS AS ((verdict->>'score')::int) STORED,
     status      case_status NOT NULL DEFAULT 'open',
     resolution  case_resolution,

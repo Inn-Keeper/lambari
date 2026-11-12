@@ -13,8 +13,8 @@ func v(id string, score int) model.Verdict {
 
 func TestOpenResolveFlow(t *testing.T) {
 	s := NewMemStore(10)
-	s.Open(v("tx_1", 50))
-	s.Open(v("tx_2", 90))
+	s.Open(v("tx_1", 50), model.Transaction{})
+	s.Open(v("tx_2", 90), model.Transaction{})
 
 	open := s.List(Open, 10)
 	if len(open) != 2 || open[0].ID != "tx_2" {
@@ -40,8 +40,8 @@ func TestOpenResolveFlow(t *testing.T) {
 // every replay would fork a duplicate case for the analyst queue.
 func TestOpenSuppressesDuplicateWhileCaseIsOpen(t *testing.T) {
 	s := NewMemStore(10)
-	s.Open(v("tx_dup", 50))
-	s.Open(v("tx_dup", 90)) // redelivery of the same transaction
+	s.Open(v("tx_dup", 50), model.Transaction{})
+	s.Open(v("tx_dup", 90), model.Transaction{}) // redelivery of the same transaction
 	open, _, _ := s.Counts()
 	if open != 1 {
 		t.Fatalf("duplicate verdict opened %d cases, want 1", open)
@@ -56,7 +56,7 @@ func TestOpenSuppressesDuplicateWhileCaseIsOpen(t *testing.T) {
 // it. This pins MemStore's behaviour, not the Store contract.
 func TestResolvedCaseIsReopenedByAReplay(t *testing.T) {
 	s := NewMemStore(10)
-	s.Open(v("tx_dup", 50))
+	s.Open(v("tx_dup", 50), model.Transaction{})
 	if _, err := s.Resolve("tx_dup", FalsePositive); err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestResolvedCaseIsReopenedByAReplay(t *testing.T) {
 		t.Fatalf("after resolve: open=%d falsePos=%d, want 0 and 1", open, fp)
 	}
 
-	s.Open(v("tx_dup", 50)) // redelivery, after the analyst already ruled on it
+	s.Open(v("tx_dup", 50), model.Transaction{}) // redelivery, after the analyst already ruled on it
 	if open, _, _ := s.Counts(); open != 1 {
 		t.Fatalf("replay after resolution left %d open cases, want 1 — if this ever "+
 			"reads 0, Open started remembering resolved TxIDs and the docs need updating "+
@@ -72,13 +72,31 @@ func TestResolvedCaseIsReopenedByAReplay(t *testing.T) {
 	}
 }
 
-func TestEvictionKeepsNewest(t *testing.T) {
+func TestEvictionBoundsOpenCases(t *testing.T) {
 	s := NewMemStore(3)
 	for i := 0; i < 5; i++ {
-		s.Open(v(string(rune('a'+i)), 40))
+		s.Open(v(string(rune('a'+i)), 40), model.Transaction{})
 	}
 	if open, _, _ := s.Counts(); open != 3 {
 		t.Fatalf("expected 3 open after eviction, got %d", open)
+	}
+}
+
+// The queue ranks by score, so eviction must too: an old high score outlives
+// newer low ones.
+func TestEvictionDropsLowestScoreFirst(t *testing.T) {
+	s := NewMemStore(2)
+	s.Open(v("worst", 90), model.Transaction{IP: "10.0.0.1"})
+	s.Open(v("mild_old", 40), model.Transaction{})
+	s.Open(v("mild_new", 40), model.Transaction{})
+	s.Open(v("mid", 60), model.Transaction{})
+
+	got := s.List(Open, 10)
+	if len(got) != 2 || got[0].ID != "worst" || got[1].ID != "mid" {
+		t.Fatalf("open = %+v, want worst then mid", got)
+	}
+	if got[0].Tx.IP != "10.0.0.1" {
+		t.Fatalf("case lost its transaction: %+v", got[0].Tx)
 	}
 }
 
@@ -86,7 +104,7 @@ func TestResolvedHistoryIsBounded(t *testing.T) {
 	s := NewMemStore(3)
 	for i := 0; i < 6; i++ {
 		id := string(rune('a' + i))
-		s.Open(v(id, 40))
+		s.Open(v(id, 40), model.Transaction{})
 		if _, err := s.Resolve(id, ConfirmedFraud); err != nil {
 			t.Fatalf("resolve %s: %v", id, err)
 		}
@@ -106,7 +124,7 @@ func TestInsertionOrderTracksOnlyOpenCases(t *testing.T) {
 	s := NewMemStore(2)
 	for i := 0; i < 1000; i++ {
 		id := fmt.Sprintf("tx_%d", i)
-		s.Open(v(id, 50))
+		s.Open(v(id, 50), model.Transaction{})
 		if _, err := s.Resolve(id, FalsePositive); err != nil {
 			t.Fatal(err)
 		}
@@ -115,13 +133,13 @@ func TestInsertionOrderTracksOnlyOpenCases(t *testing.T) {
 		t.Fatalf("%d ids retained with no open cases", n)
 	}
 
-	s.Open(v("tx_a", 50))
-	s.Open(v("tx_b", 50))
+	s.Open(v("tx_a", 50), model.Transaction{})
+	s.Open(v("tx_b", 50), model.Transaction{})
 	if _, err := s.Resolve("tx_a", FalsePositive); err != nil {
 		t.Fatal(err)
 	}
-	s.Open(v("tx_a", 50)) // replay reopens it: now the newest
-	s.Open(v("tx_c", 50)) // over capacity: the oldest open case is tx_b
+	s.Open(v("tx_a", 50), model.Transaction{}) // replay reopens it: now the newest
+	s.Open(v("tx_c", 50), model.Transaction{}) // over capacity: the oldest open case is tx_b
 
 	ids := map[string]bool{}
 	for _, c := range s.List(Open, 10) {
