@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useStream } from "./lib/useStream";
 import { formatLatencyBound, formatShare } from "./lib/format";
 import { StatCard } from "./components/StatCard";
@@ -14,6 +15,43 @@ function fmtUptime(sec: number): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
+// How long a cold engine may take to answer before we call it down.
+const STARTING_MS = 20_000;
+
+const STATUS = {
+  live: { text: "text-approve", dot: "h-1.5 w-1.5 animate-pulse bg-approve", label: "engine live" },
+  starting: {
+    text: "text-review",
+    dot: "h-2.5 w-2.5 animate-spin border-2 border-review border-t-transparent",
+    label: "engine starting…",
+  },
+  down: { text: "text-decline", dot: "h-1.5 w-1.5 bg-decline", label: "disconnected" },
+};
+
+// EventSource retries on its own, so "not connected" starts out meaning
+// "connecting": a cold engine takes a few seconds to answer. Past
+// STARTING_MS we stop pretending and show it as down; a later connect
+// still flips it to live.
+function EngineStatus({ connected }: { connected: boolean }) {
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    if (connected) return setStalled(false);
+    const t = setTimeout(() => setStalled(true), STARTING_MS);
+    return () => clearTimeout(t);
+  }, [connected]);
+
+  const s = STATUS[connected ? "live" : stalled ? "down" : "starting"];
+  return (
+    <span
+      role="status"
+      className={`flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 text-xs ${s.text}`}
+    >
+      <i className={`rounded-full ${s.dot}`} />
+      {s.label}
+    </span>
+  );
+}
+
 export default function App() {
   const { connected, stats, recent, sim, cases, queue, rateHistory } = useStream();
 
@@ -25,23 +63,7 @@ export default function App() {
           <h1 className="font-display text-xl font-bold tracking-tight">
             LAMBARI
           </h1>
-          {/* EventSource retries on its own, so "not connected" always means
-              "connecting": a cold engine takes a few seconds to answer. */}
-          <span
-            role="status"
-            className={`flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 text-xs ${
-              connected ? "text-approve" : "text-review"
-            }`}
-          >
-            <i
-              className={
-                connected
-                  ? "h-1.5 w-1.5 animate-pulse rounded-full bg-approve"
-                  : "h-2.5 w-2.5 animate-spin rounded-full border-2 border-review border-t-transparent"
-              }
-            />
-            {connected ? "engine live" : "engine starting…"}
-          </span>
+          <EngineStatus connected={connected} />
           {stats && (
             <span className="hidden text-xs text-faint sm:block">
               up {fmtUptime(stats.uptime_sec)}

@@ -6,7 +6,8 @@ Notable changes, newest first. Earlier history is in `git log`.
 
 ### Changed
 - The header status pill shows a spinner and "engine starting…" while the
-  stream connects, instead of a red "disconnected".
+  stream connects. The red "disconnected" appears only after 20 s without a
+  connection.
 
 ## 2026-11-12
 
