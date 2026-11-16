@@ -2,6 +2,12 @@
 
 Notable changes, newest first. Earlier history is in `git log`.
 
+## 2026-11-16
+
+### Changed
+- The header status pill shows a spinner and "engine starting…" while the
+  stream connects, instead of a red "disconnected".
+
 ## 2026-11-12
 
 ### Added

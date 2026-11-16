@@ -25,17 +25,22 @@ export default function App() {
           <h1 className="font-display text-xl font-bold tracking-tight">
             LAMBARI
           </h1>
+          {/* EventSource retries on its own, so "not connected" always means
+              "connecting": a cold engine takes a few seconds to answer. */}
           <span
+            role="status"
             className={`flex items-center gap-1.5 rounded-full border border-line px-2.5 py-0.5 text-xs ${
-              connected ? "text-approve" : "text-decline"
+              connected ? "text-approve" : "text-review"
             }`}
           >
             <i
-              className={`h-1.5 w-1.5 rounded-full ${
-                connected ? "animate-pulse bg-approve" : "bg-decline"
-              }`}
+              className={
+                connected
+                  ? "h-1.5 w-1.5 animate-pulse rounded-full bg-approve"
+                  : "h-2.5 w-2.5 animate-spin rounded-full border-2 border-review border-t-transparent"
+              }
             />
-            {connected ? "engine live" : "disconnected"}
+            {connected ? "engine live" : "engine starting…"}
           </span>
           {stats && (
             <span className="hidden text-xs text-faint sm:block">
